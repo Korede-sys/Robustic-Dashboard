@@ -84,30 +84,29 @@ function get(row, i) {
 
 function parseGB(rows) {
   const items = [], supplemental = [];
-  const blocks = [
-    ["GB:BLOCK_A", { username: 1, tickets: 2, stake: 3, payout: 4, profit: 9, commission: 10 }],
-    ["GB:BLOCK_B", { username: 16, tickets: 17, stake: 18, payout: 19, profit: 24, commission: 25, balance: 26 }],
-    ["GB:TIER_UP10", { username: 30, tickets: 31, stake: 32, payout: 33, profit: 38, commission: 39, bonus: 41, palliative: 42, gift: 43, balance: 45 }],
-  ];
+  // Block A is the true, complete per-agent total (stake/payout/profit/commission).
+  // Block B and TIER_UP10 were confirmed, against the real file, to re-list the SAME
+  // agents' SAME numbers verbatim -- they exist to show which commission tier each
+  // agent falls into, not to report separate activity. Counting them as separate line
+  // items double-counts real stake. Only TIER_UP10's bonus/palliative/gift columns are
+  // genuinely new information, so those are still captured as supplemental payments.
   for (const row of rows.slice(3)) {
-    for (const [label, cols] of blocks) {
-      const u = String(get(row, cols.username)).trim();
-      if (!u) continue;
-      items.push({
-        agentUsername: u, sourceBlock: label,
-        tickets: money(get(row, cols.tickets)), stake: money(get(row, cols.stake)),
-        payout: money(get(row, cols.payout)), profit: money(get(row, cols.profit)),
-        commissionAmount: money(get(row, cols.commission)), commissionType: null,
-        balance: cols.balance !== undefined ? money(get(row, cols.balance)) : null,
-        isHouse: isHouseAgent(u),
-      });
-      if (cols.bonus !== undefined) {
-        const b = money(get(row, cols.bonus)), p = money(get(row, cols.palliative)), g = money(get(row, cols.gift));
-        if (b) supplemental.push({ agentUsername: u, type: "bonus", amount: b });
-        if (p) supplemental.push({ agentUsername: u, type: "palliative", amount: p });
-        if (g) supplemental.push({ agentUsername: u, type: "gift", amount: g });
-      }
-    }
+    const u = String(get(row, 1)).trim();
+    if (!u) continue;
+    items.push({
+      agentUsername: u, sourceBlock: "GB:BLOCK_A",
+      tickets: money(get(row, 2)), stake: money(get(row, 3)), payout: money(get(row, 4)),
+      profit: money(get(row, 9)), commissionAmount: money(get(row, 10)), commissionType: null,
+      balance: null, isHouse: isHouseAgent(u),
+    });
+  }
+  for (const row of rows.slice(3)) {
+    const u = String(get(row, 30)).trim();
+    if (!u || isHouseAgent(u)) continue;
+    const b = money(get(row, 41)), p = money(get(row, 42)), g = money(get(row, 43));
+    if (b) supplemental.push({ agentUsername: u, type: "bonus", amount: b });
+    if (p) supplemental.push({ agentUsername: u, type: "palliative", amount: p });
+    if (g) supplemental.push({ agentUsername: u, type: "gift", amount: g });
   }
   return { items, supplemental };
 }
@@ -226,14 +225,13 @@ const PARSERS = { GB: parseGB, EB: parseEB, EB_MB: parseEBMB, SP: parseSP, SP_MB
    being wired in here — see the Formulas tab for the evidence. */
 const TYPE_RULE_BLOCKS = new Set(["EB:LUCKYBALL", "EB:LUCKYGREECK", "EB:ROCKET_MAN", "EB_MB:BASE"]);
 const CONFIRMED_BLOCK_RULES = {
-  "GB:BLOCK_B": { basis: "profit", rate: 0.40, confidence: "confirmed" },
   "SP:35PCT": { basis: "profit", rate: 0.35, confidence: "confirmed" },
   "SP:POOL": { basis: "profit", rate: 0.15, confidence: "tentative (only 3 samples)" },
 };
 const STRUCTURALLY_TRUSTED = new Set([
   "EB:LUCKYBALL", "EB:LUCKYGREECK", "EB:ROCKET_MAN", "EB_MB:BASE",
   "SP:35PCT", "SP:UP30PCT", "SP:3RD_PARTY", "SP:POOL",
-  "GB:BLOCK_A", "GB:BLOCK_B", "GB:TIER_UP10",
+  "GB:BLOCK_A",
   "SP_MB:BASE",
 ]);
 const EXCLUDED_BLOCKS = new Set([

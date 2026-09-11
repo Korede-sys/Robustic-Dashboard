@@ -911,7 +911,7 @@ function FormulasTab() {
   const rows = [
     { block: "Luckyball / Luckygreek / Rocket Man (weekly)", formula: "Per-agent Type field: sale(X%) → X% of stake; profit(X%) → X% of profit", status: "confirmed", note: "Zero variance against every sampled agent" },
     { block: "Luckyball Monthly Bonus", formula: "Same Type-based rule as above", status: "confirmed", note: "Zero variance" },
-    { block: "Globalbet Virtual — tier B", formula: "40% of profit", status: "confirmed", note: "Zero variance, n=30" },
+    { block: "Globalbet Virtual", formula: "Commission read directly from the sheet (Block A, the complete per-agent total)", status: "confirmed", note: "Blocks B and 'UP-10%' were found to re-list the same agents' same numbers verbatim -- confirmed by checking real agent rows -- so they contribute only their bonus/palliative/gift figures, never stake or commission a second time" },
     { block: "Sports — 35% tier", formula: "35% of profit", status: "confirmed", note: "Zero variance on every row with positive profit" },
     { block: "Sports — POOL tier", formula: "15% of profit", status: "tentative", note: "Only 3 samples — treat as provisional" },
     { block: "Globalbet Virtual — tiers A & UP-10%", formula: "Not yet confirmed", status: "unverified", note: "No clean single ratio found against stake or profit; source value used as-is" },

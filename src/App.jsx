@@ -6,6 +6,7 @@ import {
   Upload, Download, CheckCircle2, AlertTriangle, ShieldCheck, ShieldAlert,
   FileSpreadsheet, History as HistoryIcon, BookOpen, X, Loader2, Trash2, LayoutGrid,
   Users, Package, MapPin, Search, ArrowUp, ArrowDown, Minus, Phone, ClipboardList, TrendingUp, Check, LogOut, UserCog,
+  Sliders, Activity as ActivityIcon, Eye,
 } from "lucide-react";
 
 import {
@@ -17,16 +18,28 @@ import {
   signIn, signOut, onAuthStateChange, getSession, getMyProfile, getAllProfiles, updateProfileRole,
   saveBatch, loadAllBatches, deleteBatch,
   loadAllInterventions, saveIntervention, updateInterventionStatus, deleteIntervention,
+  loadCommissionRules, updateCommissionRule, addCommissionRule, logActivity, loadActivityLog,
 } from "./lib/dataLayer";
 import LoginScreen from "./LoginScreen";
 
 /* ============================================================ design tokens */
 const C = {
-  paper: "#F7F6F2", panel: "#FFFFFF", ink: "#14171F", sub: "#5B6472", line: "#E1DDD3",
-  emerald: "#0B6E4F", emeraldSoft: "#E6F1EC", amber: "#C98A2C", amberSoft: "#FBF1E1",
-  brick: "#B23A2E", brickSoft: "#FAEAE8", navy: "#1F2A3D",
+  // Content area: warm parchment, like a ledger's pages.
+  paper: "#EDE7DA", panel: "#FBF9F4", ink: "#211E17", sub: "#6B6355", line: "#DCD3C0",
+  // Semantic states -- kept under the old names (emerald/amber/brick) to avoid
+  // touching every call site, but re-tuned to the ledger palette: muted book-green
+  // for confirmed/positive, ochre for tentative, rust for mismatch/danger.
+  emerald: "#3D6B4C", emeraldSoft: "#E3EAE1", amber: "#B8862E", amberSoft: "#F5EBD8",
+  brick: "#9C3B2C", brickSoft: "#F3E2DC",
+  // "navy" is now the deep ledger-green used for primary buttons/CTAs -- name kept for the same reason.
+  navy: "#24352A",
+  // New: the navigation rail reads as the book's cloth cover -- darker and separate
+  // from the parchment content area, with the rust stamp-red as the one bold accent.
+  railBg: "#1D2B22", railActiveBg: "#31473A", railText: "#C9C0A9", railTextActive: "#F5F1E6",
+  stamp: "#A34A28", stampSoft: "#3A2A22",
 };
 const serif = { fontFamily: "'Fraunces', Georgia, serif" };
+const mono = { fontFamily: "'IBM Plex Mono', 'SF Mono', Consolas, monospace" };
 const nums = { fontVariantNumeric: "tabular-nums" };
 
 const nairaShort = (n) => {
@@ -61,18 +74,20 @@ function downloadCSV(filename, rows, columns) {
 
 /* ============================================================ UI shell */
 const ALL_NAV = [
-  { id: "upload", label: "Upload & Process", icon: Upload, action: "upload" },
-  { id: "overview", label: "Overview", icon: LayoutGrid, action: "view_reports" },
-  { id: "agents", label: "Agents", icon: Users, action: "view_reports" },
-  { id: "products", label: "Products", icon: Package, action: "view_reports" },
-  { id: "states", label: "States", icon: MapPin, action: "view_reports" },
-  { id: "trends", label: "Trends", icon: TrendingUp, action: "view_reports" },
-  { id: "lowactivity", label: "Needs Attention", icon: AlertTriangle, action: "manage_followups" },
-  { id: "followups", label: "Follow-ups", icon: ClipboardList, action: "manage_followups" },
-  { id: "export", label: "Clean Export", icon: Download, action: "export" },
-  { id: "history", label: "History", icon: HistoryIcon, action: "view_reports" },
-  { id: "users", label: "Team", icon: UserCog, action: "manage_users" },
-  { id: "formulas", label: "Formulas", icon: BookOpen, action: "view_reports" },
+  { id: "upload", label: "Upload & Process", icon: Upload, action: "upload", section: "Work" },
+  { id: "overview", label: "Overview", icon: LayoutGrid, action: "view_reports", section: "Reporting" },
+  { id: "agents", label: "Agents", icon: Users, action: "view_reports", section: "Reporting" },
+  { id: "products", label: "Products", icon: Package, action: "view_reports", section: "Reporting" },
+  { id: "states", label: "States", icon: MapPin, action: "view_reports", section: "Reporting" },
+  { id: "trends", label: "Trends", icon: TrendingUp, action: "view_reports", section: "Reporting" },
+  { id: "lowactivity", label: "Needs Attention", icon: AlertTriangle, action: "manage_followups", section: "Operations" },
+  { id: "followups", label: "Follow-ups", icon: ClipboardList, action: "manage_followups", section: "Operations" },
+  { id: "export", label: "Clean Export", icon: Download, action: "export", section: "Operations" },
+  { id: "history", label: "History", icon: HistoryIcon, action: "view_reports", section: "Operations" },
+  { id: "rules", label: "Rules", icon: Sliders, action: "manage_rules", section: "Admin" },
+  { id: "activity", label: "Activity", icon: ActivityIcon, action: "view_reports", section: "Admin" },
+  { id: "users", label: "Team", icon: UserCog, action: "manage_users", section: "Admin" },
+  { id: "formulas", label: "Formulas", icon: BookOpen, action: "view_reports", section: "Reference" },
 ];
 
 export default function App() {
@@ -88,6 +103,9 @@ export default function App() {
   const [selectedKeys, setSelectedKeys] = useState(new Set());
   const [interventions, setInterventions] = useState([]);
   const [callAgent, setCallAgent] = useState(null);
+  const [rules, setRules] = useState({});
+  const [ruleRows, setRuleRows] = useState([]);
+  const [activityLog, setActivityLog] = useState([]);
   const fileInputRef = useRef(null);
 
   // ---- auth: check session on load, react to sign-in/out ----
@@ -111,16 +129,79 @@ export default function App() {
     if (!session) return;
     (async () => {
       setLoading(true);
-      const [loadedBatches, loadedInterventions] = await Promise.all([
+      const [loadedBatches, loadedInterventions, ruleData, loadedActivity] = await Promise.all([
         loadAllBatches(),
         can(profile?.role, "manage_followups") ? loadAllInterventions() : Promise.resolve([]),
+        // These two tables are new (added by schema_v2_rules_and_activity.sql). If that
+        // migration hasn't been run yet, fail gracefully to defaults instead of taking
+        // the whole app down -- everything else still works, just without live rules
+        // (falls back to the engine's built-in defaults) or an activity history yet.
+        loadCommissionRules().catch(() => ({ rules: {}, rows: [] })),
+        loadActivityLog().catch(() => []),
       ]);
       setBatches(loadedBatches);
       setSelectedKeys(new Set(loadedBatches.map(b => b.id)));
       setInterventions(loadedInterventions);
+      setRules(ruleData.rules);
+      setRuleRows(ruleData.rows);
+      setActivityLog(loadedActivity);
       setLoading(false);
     })();
   }, [session, profile?.role]);
+
+  async function refreshActivity() {
+    try { setActivityLog(await loadActivityLog()); } catch (e) { /* non-critical */ }
+  }
+
+  const [previewData, setPreviewData] = useState(null); // { parsedBatches, agg } once parsed, before saving
+
+  async function parseAllPending() {
+    setProcessing(true);
+    const parsedBatches = [];
+    for (const pf of pendingFiles) {
+      if (!pf.detectedType) continue;
+      const text = await pf.file.text();
+      const rows = parseCSV(text);
+      const { items, supplemental } = PARSERS[pf.detectedType](rows);
+      parsedBatches.push({ type: pf.detectedType, filename: pf.name, items, supplemental });
+    }
+    const agg = aggregateBatches(parsedBatches, rules);
+    // Per-file, per-block item counts -- the direct way to spot a double-counting
+    // bug before it becomes real data: a block with a suspiciously high count
+    // relative to the others in the same file is exactly what caught the last one.
+    const blockCounts = parsedBatches.map(b => {
+      const counts = {};
+      for (const item of b.items) counts[item.sourceBlock] = (counts[item.sourceBlock] || 0) + 1;
+      return { filename: b.filename, type: b.type, counts, totalRows: b.items.length };
+    });
+    setPreviewData({ parsedBatches, agg, blockCounts });
+    setProcessing(false);
+  }
+
+  async function confirmSave() {
+    if (!previewData) return;
+    setProcessing(true);
+    const newBatches = [];
+    for (const batch of previewData.parsedBatches) {
+      const saved = await saveBatch(batch, session.user.id);
+      newBatches.push(saved);
+      await logActivity("upload", `Uploaded ${batch.filename} (${batch.items.length} rows)`, session.user.id);
+    }
+    setBatches(prev => {
+      const merged = [...prev, ...newBatches];
+      setSelectedKeys(new Set(merged.map(b => b.id)));
+      return merged;
+    });
+    setPendingFiles([]);
+    setPreviewData(null);
+    setProcessing(false);
+    setTab("overview");
+    refreshActivity();
+  }
+
+  function cancelPreview() {
+    setPreviewData(null);
+  }
 
   const handleFiles = useCallback((fileList) => {
     const files = Array.from(fileList).map(f => ({
@@ -129,46 +210,32 @@ export default function App() {
     setPendingFiles(prev => [...prev, ...files]);
   }, []);
 
-  async function processPending() {
-    setProcessing(true);
-    const newBatches = [];
-    for (const pf of pendingFiles) {
-      if (!pf.detectedType) continue;
-      const text = await pf.file.text();
-      const rows = parseCSV(text);
-      const { items, supplemental } = PARSERS[pf.detectedType](rows);
-      const batch = { type: pf.detectedType, filename: pf.name, items, supplemental };
-      const saved = await saveBatch(batch, session.user.id);
-      newBatches.push(saved);
-    }
-    setBatches(prev => {
-      const merged = [...prev, ...newBatches];
-      setSelectedKeys(new Set(merged.map(b => b.id)));
-      return merged;
-    });
-    setPendingFiles([]);
-    setProcessing(false);
-    setTab("overview");
-  }
-
   async function removeBatch(b) {
     await deleteBatch(b.id);
     setBatches(prev => prev.filter(x => x.id !== b.id));
     setSelectedKeys(prev => { const next = new Set(prev); next.delete(b.id); return next; });
+    await logActivity("delete_upload", `Deleted ${b.filename}`, session.user.id);
+    refreshActivity();
   }
 
   async function logIntervention(record) {
     const id = await saveIntervention(record, session.user.id);
     setInterventions(prev => [...prev, { ...record, id, contactedBy: profile?.name || "—" }]);
+    await logActivity("log_followup", `Logged a call with ${record.agentUsername}`, session.user.id);
+    refreshActivity();
     return true;
   }
   async function handleUpdateInterventionStatus(record, status) {
     await updateInterventionStatus(record.id, status);
     setInterventions(prev => prev.map(i => i.id === record.id ? { ...i, status } : i));
+    await logActivity(status === "resolved" ? "resolve_followup" : "reopen_followup", `${status === "resolved" ? "Resolved" : "Reopened"} follow-up for ${record.agentUsername}`, session.user.id);
+    refreshActivity();
   }
   async function removeInterventionRecord(record) {
     await deleteIntervention(record.id);
     setInterventions(prev => prev.filter(i => i.id !== record.id));
+    await logActivity("delete_followup", `Deleted follow-up for ${record.agentUsername}`, session.user.id);
+    refreshActivity();
   }
 
   if (authLoading) {
@@ -182,40 +249,65 @@ export default function App() {
   }
 
   const NAV = ALL_NAV.filter(n => can(profile.role, n.action));
+  const NAV_SECTIONS = [];
+  for (const item of NAV) {
+    let group = NAV_SECTIONS.find(g => g.section === item.section);
+    if (!group) { group = { section: item.section, items: [] }; NAV_SECTIONS.push(group); }
+    group.items.push(item);
+  }
   const selectedBatches = batches.filter(b => selectedKeys.has(b.id));
-  const agg = aggregateBatches(selectedBatches);
+  const agg = aggregateBatches(selectedBatches, rules);
   const trends = computeTrends(batches);
   const series = computeBatchSeries(batches);
 
   return (
     <div style={{ background: C.paper, color: C.ink, minHeight: "100vh", display: "flex", fontFamily: "'Inter', sans-serif" }}>
-      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" />
-      <div style={{ width: 208, borderRight: `1px solid ${C.line}`, padding: "24px 12px", display: "flex", flexDirection: "column", flexShrink: 0 }}>
-        <div style={{ padding: "0 12px 20px" }}>
-          <div style={{ ...serif, fontSize: 20, fontWeight: 600, letterSpacing: -0.3 }}>Robustic</div>
-          <div style={{ fontSize: 11, color: C.sub, marginTop: 2 }}>Sales &amp; Commission Reporting</div>
+      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" />
+      <div style={{ width: 220, background: C.railBg, padding: "22px 12px", display: "flex", flexDirection: "column", flexShrink: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "2px 10px 22px" }}>
+          <RobusticMark />
+          <div>
+            <div style={{ ...serif, fontSize: 18, fontWeight: 600, color: C.railTextActive, letterSpacing: -0.2 }}>Robustic</div>
+            <div style={{ fontSize: 10.5, color: C.railText }}>Sales &amp; Commission</div>
+          </div>
         </div>
-        {NAV.map((n) => {
-          const Icon = n.icon; const active = tab === n.id;
-          return (
-            <button key={n.id} onClick={() => setTab(n.id)} style={{
-              display: "flex", alignItems: "center", gap: 10, padding: "9px 12px",
-              border: "none", background: active ? C.emeraldSoft : "transparent",
-              color: active ? C.emerald : C.sub, borderRadius: 4, cursor: "pointer",
-              fontSize: 13.5, fontWeight: active ? 600 : 500, textAlign: "left", marginBottom: 2,
-            }}>
-              <Icon size={16} strokeWidth={2} />{n.label}
-            </button>
-          );
-        })}
-        <div style={{ marginTop: "auto", paddingTop: 12, borderTop: `1px solid ${C.line}` }}>
-          <div style={{ padding: "0 12px 8px" }}>
-            <div style={{ fontSize: 12.5, fontWeight: 600 }}>{profile.name}</div>
-            <div style={{ fontSize: 11, color: C.sub, textTransform: "capitalize" }}>{profile.role} · {batches.length} file{batches.length !== 1 ? "s" : ""}</div>
+        <div style={{ flex: 1, overflowY: "auto" }}>
+          {NAV_SECTIONS.map((group) => (
+            <div key={group.section} style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: 0.6, color: C.railText, opacity: 0.6, padding: "0 12px 5px" }}>
+                {group.section}
+              </div>
+              {group.items.map((n) => {
+                const Icon = n.icon; const active = tab === n.id;
+                return (
+                  <button key={n.id} onClick={() => setTab(n.id)} style={{
+                    display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "6px 10px",
+                    border: "none", background: active ? C.railActiveBg : "transparent",
+                    color: active ? C.railTextActive : C.railText, borderRadius: 7, cursor: "pointer",
+                    fontSize: 13, fontWeight: active ? 600 : 500, textAlign: "left", marginBottom: 2,
+                  }}>
+                    <span style={{
+                      display: "flex", alignItems: "center", justifyContent: "center", width: 26, height: 26,
+                      borderRadius: "50%", flexShrink: 0, background: active ? C.stamp : "transparent",
+                      border: active ? "none" : `1px solid ${C.railText}55`,
+                    }}>
+                      <Icon size={13.5} strokeWidth={2} color={active ? C.railTextActive : C.railText} />
+                    </span>
+                    {n.label}
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+        <div style={{ paddingTop: 12, borderTop: `1px solid ${C.railText}33` }}>
+          <div style={{ padding: "0 10px 8px" }}>
+            <div style={{ fontSize: 12.5, fontWeight: 600, color: C.railTextActive }}>{profile.name}</div>
+            <div style={{ fontSize: 10.5, color: C.railText, textTransform: "capitalize" }}>{profile.role} · {batches.length} file{batches.length !== 1 ? "s" : ""}</div>
           </div>
           <button onClick={() => signOut()} style={{
-            display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "8px 12px",
-            border: "none", background: "transparent", color: C.sub, cursor: "pointer", fontSize: 12.5,
+            display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "7px 10px",
+            border: "none", background: "transparent", color: C.railText, cursor: "pointer", fontSize: 12.5,
           }}>
             <LogOut size={14} /> Sign out
           </button>
@@ -231,9 +323,10 @@ export default function App() {
           <>
             {tab === "upload" && can(profile.role, "upload") && (
               <UploadTab pendingFiles={pendingFiles} setPendingFiles={setPendingFiles} handleFiles={handleFiles}
-                processPending={processPending} processing={processing} fileInputRef={fileInputRef} hasHistory={batches.length > 0} />
+                parseAllPending={parseAllPending} confirmSave={confirmSave} cancelPreview={cancelPreview}
+                previewData={previewData} processing={processing} fileInputRef={fileInputRef} hasHistory={batches.length > 0} />
             )}
-            {tab !== "upload" && tab !== "history" && tab !== "formulas" && tab !== "trends" && tab !== "followups" && tab !== "users" && batches.length > 0 && (
+            {tab !== "upload" && tab !== "history" && tab !== "formulas" && tab !== "trends" && tab !== "followups" && tab !== "users" && tab !== "rules" && tab !== "activity" && batches.length > 0 && (
               <PeriodSelector batches={batches} selectedKeys={selectedKeys} setSelectedKeys={setSelectedKeys} />
             )}
             {tab === "overview" && <OverviewTab agg={agg} trends={trends} hasData={batches.length > 0} />}
@@ -249,13 +342,30 @@ export default function App() {
             )}
             {tab === "export" && can(profile.role, "export") && <ExportTab agg={agg} />}
             {tab === "history" && <HistoryTab batches={batches} removeBatch={can(profile.role, "delete_upload") ? removeBatch : null} />}
-            {tab === "users" && can(profile.role, "manage_users") && <UsersTab currentUserId={profile.id} />}
+            {tab === "rules" && can(profile.role, "manage_rules") && (
+              <RulesTab ruleRows={ruleRows} setRuleRows={setRuleRows} setRules={setRules} userId={session.user.id} logActivityFn={logActivity} refreshActivity={refreshActivity} batches={batches} />
+            )}
+            {tab === "activity" && <ActivityTab activityLog={activityLog} />}
+            {tab === "users" && can(profile.role, "manage_users") && <UsersTab currentUserId={profile.id} refreshActivity={refreshActivity} />}
             {tab === "formulas" && <FormulasTab />}
           </>
         )}
       </div>
       {callAgent && <CallModal agent={callAgent} onClose={() => setCallAgent(null)} onSave={logIntervention} />}
     </div>
+  );
+}
+
+function RobusticMark() {
+  // A stamp/ticket-perforation ring with an "R" monogram -- the one bold accent
+  // color (rust stamp-red) used here as the brand mark, matching its only other
+  // use: verification states, since a stamp is literally what this app produces.
+  return (
+    <svg width="34" height="34" viewBox="0 0 34 34" style={{ flexShrink: 0 }}>
+      <circle cx="17" cy="17" r="15.5" fill="none" stroke={C.stamp} strokeWidth="1.4" strokeDasharray="1.6 2.4" />
+      <circle cx="17" cy="17" r="11.5" fill="none" stroke={C.railTextActive} strokeWidth="0.75" opacity="0.45" />
+      <text x="17" y="22.5" textAnchor="middle" fontFamily="Fraunces, Georgia, serif" fontSize="14" fontWeight="600" fill={C.railTextActive}>R</text>
+    </svg>
   );
 }
 
@@ -290,8 +400,55 @@ function PeriodSelector({ batches, selectedKeys, setSelectedKeys }) {
 }
 
 /* ============================================================ Upload tab */
-function UploadTab({ pendingFiles, setPendingFiles, handleFiles, processPending, processing, fileInputRef, hasHistory }) {
+function UploadTab({ pendingFiles, setPendingFiles, handleFiles, parseAllPending, confirmSave, cancelPreview, previewData, processing, fileInputRef, hasHistory }) {
   const [dragOver, setDragOver] = useState(false);
+
+  if (previewData) {
+    const { agg, blockCounts } = previewData;
+    return (
+      <>
+        <h1 style={{ ...serif, fontSize: 28, fontWeight: 500, margin: "0 0 20px" }}>Review before saving</h1>
+        <Panel>
+          <div style={{ fontSize: 13, color: C.sub, lineHeight: 1.5 }}>
+            Nothing has been saved yet. Check these totals against the sheet's own numbers before confirming —
+            this is the point where a parsing problem is cheap to catch, not after it's part of your reports.
+          </div>
+        </Panel>
+        <div style={{ display: "flex", gap: 14, marginBottom: 20 }}>
+          <Kpi label="Agents" value={agg.agents.length} />
+          <Kpi label="Total Stake" value={nairaShort(agg.totals.stake)} />
+          <Kpi label="Total Commission" value={nairaShort(agg.totals.commission)} />
+          <Kpi label="Total Bonus" value={nairaShort(agg.totals.monthlyBonus)} />
+        </div>
+        <Panel title="Rows parsed per block">
+          {blockCounts.map((b, i) => (
+            <div key={i} style={{ marginBottom: 10 }}>
+              <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>{b.filename} <span style={{ color: C.sub, fontWeight: 400 }}>({b.totalRows} rows total)</span></div>
+              {Object.entries(b.counts).map(([block, count]) => (
+                <div key={block} style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, padding: "3px 0 3px 12px", color: C.sub }}>
+                  <span>{block}</span><span style={nums}>{count}</span>
+                </div>
+              ))}
+            </div>
+          ))}
+        </Panel>
+        <div style={{ display: "flex", gap: 10 }}>
+          <button onClick={cancelPreview} disabled={processing} style={{
+            flex: 1, background: "transparent", color: C.sub, border: `1px solid ${C.line}`, padding: "11px 0",
+            fontSize: 13.5, fontWeight: 600, cursor: "pointer",
+          }}>Cancel</button>
+          <button onClick={confirmSave} disabled={processing} style={{
+            flex: 2, background: C.emerald, color: "#fff", border: "none", padding: "11px 0",
+            fontSize: 13.5, fontWeight: 600, cursor: processing ? "default" : "pointer",
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 8, opacity: processing ? 0.7 : 1,
+          }}>
+            {processing ? <Loader2 size={15} /> : <>Looks right — confirm &amp; save <CheckCircle2 size={15} /></>}
+          </button>
+        </div>
+      </>
+    );
+  }
+
   return (
     <>
       <h1 style={{ ...serif, fontSize: 28, fontWeight: 500, margin: "0 0 20px" }}>Upload &amp; Process</h1>
@@ -329,12 +486,12 @@ function UploadTab({ pendingFiles, setPendingFiles, handleFiles, processPending,
               </button>
             </div>
           ))}
-          <button onClick={processPending} disabled={processing} style={{
+          <button onClick={parseAllPending} disabled={processing} style={{
             marginTop: 14, width: "100%", background: C.navy, color: "#fff", border: "none",
             padding: "11px 0", fontSize: 13.5, fontWeight: 600, cursor: processing ? "default" : "pointer",
             display: "flex", alignItems: "center", justifyContent: "center", gap: 8, opacity: processing ? 0.7 : 1,
           }}>
-            {processing ? <><Loader2 size={15} /> Cleaning &amp; calculating…</> : <>Process &amp; add to system</>}
+            {processing ? <><Loader2 size={15} /> Cleaning &amp; calculating…</> : <>Clean &amp; preview <Eye size={15} /></>}
           </button>
         </Panel>
       )}
@@ -463,7 +620,7 @@ function AgentsTab({ agg, trends }) {
               {filtered.slice(0, 150).map(a => (
                 <tr key={a.username}>
                   <td style={{ padding: "8px", borderBottom: `1px solid ${C.line}`, color: C.sub }}>#{a.rank}</td>
-                  <td style={{ padding: "8px", borderBottom: `1px solid ${C.line}`, fontWeight: 500 }}>{a.username}</td>
+                  <td style={{ ...mono, padding: "8px", borderBottom: `1px solid ${C.line}`, fontWeight: 500, fontSize: 12.5 }}>{a.username}</td>
                   <td style={{ padding: "8px", borderBottom: `1px solid ${C.line}`, color: C.sub }}>{a.state}</td>
                   <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}` }}>{naira(a.stake)}</td>
                   <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}` }}>{naira(a.payout)}</td>
@@ -854,7 +1011,7 @@ function ExportTab({ agg }) {
             <tbody>
               {agg.agents.slice(0, 200).map(a => (
                 <tr key={a.username}>
-                  <td style={{ padding: "8px", borderBottom: `1px solid ${C.line}`, fontWeight: 500 }}>{a.username}</td>
+                  <td style={{ ...mono, padding: "8px", borderBottom: `1px solid ${C.line}`, fontWeight: 500, fontSize: 12.5 }}>{a.username}</td>
                   <td style={{ padding: "8px", borderBottom: `1px solid ${C.line}`, color: C.sub }}>{a.state}</td>
                   <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}` }}>{naira(a.stake)}</td>
                   <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}` }}>{naira(a.sourceCommission)}</td>
@@ -911,11 +1068,12 @@ function FormulasTab() {
   const rows = [
     { block: "Luckyball / Luckygreek / Rocket Man (weekly)", formula: "Per-agent Type field: sale(X%) → X% of stake; profit(X%) → X% of profit", status: "confirmed", note: "Zero variance against every sampled agent" },
     { block: "Luckyball Monthly Bonus", formula: "Same Type-based rule as above", status: "confirmed", note: "Zero variance" },
-    { block: "Globalbet Virtual", formula: "Commission read directly from the sheet (Block A, the complete per-agent total)", status: "confirmed", note: "Blocks B and 'UP-10%' were found to re-list the same agents' same numbers verbatim -- confirmed by checking real agent rows -- so they contribute only their bonus/palliative/gift figures, never stake or commission a second time" },
+    { block: "Globalbet Virtual — 40%-tier agents", formula: "40% of profit — governs this population, but the value itself is always read directly from Block A (the sole data source; see below)", status: "confirmed", note: "Zero variance, independently verified against real agent rows" },
+    { block: "Globalbet Virtual — UP-10%-tier agents", formula: "Selections-per-ticket sliding scale (4%–10% of stake), calculated by AccessBET's own system — value read directly from Block A, same as the 40% population", status: "external", note: "Structure independently confirmed: 89/89 real agents tested landed within 1pp of one of the 6 allowed percentages, zero outliers — but selections-per-ticket isn't in this export, so the exact per-agent rate can't be re-derived here. The sheet's own commission value (from Block A) is trusted as-is." },
     { block: "Sports — 35% tier", formula: "35% of profit", status: "confirmed", note: "Zero variance on every row with positive profit" },
     { block: "Sports — POOL tier", formula: "15% of profit", status: "tentative", note: "Only 3 samples — treat as provisional" },
-    { block: "Globalbet Virtual — tiers A & UP-10%", formula: "Not yet confirmed", status: "unverified", note: "No clean single ratio found against stake or profit; source value used as-is" },
-    { block: "Sports — UP-30% & 3rd Party tiers", formula: "Not yet confirmed", status: "unverified", note: "Structure is clear, formula isn't" },
+    { block: "Sports — UP-30% tier", formula: "Selections-per-ticket sliding scale (1%–30% of profit) + a monthly bonus (30% of monthly profit minus that month's commissions), calculated by AccessBET's own system", status: "external", note: "Structure partially confirmed: about 1 in 5 tested agents matched an allowed percentage almost exactly, but some agents showed ratios above the stated 30% maximum — worth checking with the platform. Selections-per-ticket isn't in this export, so this can't be independently re-derived here; the sheet's own commission value is trusted as-is." },
+    { block: "Sports — 3rd Party tier", formula: "Not yet confirmed", status: "unverified", note: "No agents have appeared in this tier in any upload so far" },
     { block: "Sports base block", formula: "Deliberately not used as a line item", status: "confirmed", note: "Reconciles exactly to the report's own grand total once the house row is excluded — it's left out specifically because it re-lists the same agents already captured via the 35%/UP-30%/3rd Party/Pool tiers, and including both would double-count every agent" },
     { block: "Sport Monthly Bonus — base", formula: "Settled/stake/payout/profit/commission read directly", status: "confirmed", note: "Reconciles exactly to the report's own grand total once the 000 ONLINE house row is excluded" },
     { block: "Sport Monthly Bonus — tier sections (ABOVE 100 TICKETS, etc.)", formula: "Bonus read directly from the M.BONUS column", status: "confirmed", note: "These sections re-list the same agents' base numbers verbatim for tier categorization — only their bonus figure is used, to avoid double-counting stake already counted in the base block" },
@@ -923,12 +1081,14 @@ function FormulasTab() {
   const badge = (status) => {
     const map = {
       confirmed: [C.emerald, C.emeraldSoft, <ShieldCheck size={13} />],
+      external: [C.stamp, C.amberSoft, <ShieldCheck size={13} />],
       tentative: [C.amber, C.amberSoft, <AlertTriangle size={13} />],
       unverified: [C.amber, C.amberSoft, <AlertTriangle size={13} />],
       excluded: [C.brick, C.brickSoft, <ShieldAlert size={13} />],
     };
     const [color, bg, icon] = map[status];
-    return <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color, background: bg, padding: "2px 8px", fontSize: 11, fontWeight: 600, textTransform: "capitalize" }}>{icon}{status}</span>;
+    const label = status === "external" ? "Calculated externally" : status;
+    return <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color, background: bg, padding: "2px 8px", fontSize: 11, fontWeight: 600, textTransform: "capitalize" }}>{icon}{label}</span>;
   };
   return (
     <>
@@ -976,7 +1136,249 @@ const ROLE_DESCRIPTIONS = {
   viewer: "Read-only access to reports",
 };
 
-function UsersTab({ currentUserId }) {
+/* ============================================================ Rules (admin only) */
+function RulesTab({ ruleRows, setRuleRows, setRules, userId, logActivityFn, refreshActivity, batches }) {
+  const [editing, setEditing] = useState({}); // id -> { rate, override }
+  const [saving, setSaving] = useState({});
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [newRule, setNewRule] = useState({ source_block: "", label: "", basis: "profit", rate: "", override_source: false });
+  const [addError, setAddError] = useState(null);
+  const [adding, setAdding] = useState(false);
+
+  // Reference helper: every block currently in the system, and for Type-based
+  // blocks, the actual Type strings seen in uploaded data -- so an admin adding
+  // a targeted rule can copy the exact key rather than guessing at it.
+  const knownBlocks = new Set();
+  const typesByBlock = {};
+  for (const b of batches) {
+    for (const item of b.items) {
+      knownBlocks.add(item.sourceBlock);
+      if (item.commissionType) {
+        (typesByBlock[item.sourceBlock] ||= new Set()).add(item.commissionType);
+      }
+    }
+  }
+
+  function startEdit(rule) {
+    setEditing(prev => ({ ...prev, [rule.id]: { rate: String(Math.round(rule.rate * 1000) / 10), override: rule.override_source } }));
+  }
+  function cancelEdit(id) {
+    setEditing(prev => { const next = { ...prev }; delete next[id]; return next; });
+  }
+  async function saveEdit(rule) {
+    const draft = editing[rule.id];
+    const pct = parseFloat(draft.rate);
+    if (isNaN(pct) || pct < 0 || pct > 100) return;
+    const newRate = pct / 100;
+    setSaving(prev => ({ ...prev, [rule.id]: true }));
+    try {
+      await updateCommissionRule(rule.id, { rate: newRate, override_source: draft.override }, userId);
+      const updatedRow = { ...rule, rate: newRate, override_source: draft.override };
+      setRuleRows(prev => prev.map(r => r.id === rule.id ? updatedRow : r));
+      setRules(prev => ({ ...prev, [rule.source_block]: { basis: rule.basis, rate: newRate, confidence: rule.confidence, override: draft.override } }));
+      const changeDesc = draft.override
+        ? `Set ${rule.label} to ${pct}% and turned override ON -- this now determines what's exported`
+        : `Set ${rule.label} to ${pct}% (audit-check only)`;
+      await logActivityFn("update_rule", changeDesc, userId);
+      refreshActivity();
+      cancelEdit(rule.id);
+    } finally {
+      setSaving(prev => { const next = { ...prev }; delete next[rule.id]; return next; });
+    }
+  }
+
+  async function submitNewRule() {
+    setAddError(null);
+    const pct = parseFloat(newRule.rate);
+    if (!newRule.source_block.trim()) { setAddError("Rule key is required."); return; }
+    if (!newRule.label.trim()) { setAddError("Label is required."); return; }
+    if (isNaN(pct) || pct < 0 || pct > 100) { setAddError("Rate must be a number between 0 and 100."); return; }
+    setAdding(true);
+    try {
+      const rate = pct / 100;
+      await addCommissionRule({
+        source_block: newRule.source_block.trim(), label: newRule.label.trim(),
+        basis: newRule.basis, rate, confidence: "custom", override_source: newRule.override_source,
+      }, userId);
+      const { rules: freshRules, rows: freshRows } = await loadCommissionRules();
+      setRules(freshRules);
+      setRuleRows(freshRows);
+      await logActivityFn("update_rule", `Added new rule "${newRule.label}" (${newRule.source_block}, ${pct}%${newRule.override_source ? ", override ON" : ""})`, userId);
+      refreshActivity();
+      setNewRule({ source_block: "", label: "", basis: "profit", rate: "", override_source: false });
+      setShowAddForm(false);
+    } catch (e) {
+      setAddError(e.message || "Couldn't save this rule.");
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  const activeOverrides = ruleRows.filter(r => r.override_source);
+
+  return (
+    <>
+      <h1 style={{ ...serif, fontSize: 28, fontWeight: 500, margin: "0 0 20px" }}>Commission Rules</h1>
+      <Panel>
+        <div style={{ fontSize: 13, color: C.sub, lineHeight: 1.5 }}>
+          Every rule has an <strong>Override</strong> switch, off by default. <strong>Off</strong>: the rule is just
+          a cross-check against the sheet's own commission — it flags disagreement, never changes what's paid.
+          <strong> On</strong>: the calculated value from this rule replaces the sheet's value for this
+          product/tier in every report and export, starting immediately. Use this when a rate has genuinely
+          changed and the sheet you're uploading doesn't reflect it yet.
+        </div>
+      </Panel>
+
+      {activeOverrides.length > 0 && (
+        <Panel>
+          <div style={{ display: "flex", gap: 12 }}>
+            <AlertTriangle size={18} color={C.stamp} style={{ flexShrink: 0, marginTop: 1 }} />
+            <div style={{ fontSize: 13, color: C.ink }}>
+              <strong>{activeOverrides.length} rule(s) are currently overriding the sheet:</strong>{" "}
+              {activeOverrides.map(r => r.label).join(", ")}. These are actively changing what gets exported.
+            </div>
+          </div>
+        </Panel>
+      )}
+
+      <Panel title={`${ruleRows.length} rule(s)`} right={
+        <button onClick={() => setShowAddForm(v => !v)} style={{ border: `1px solid ${C.line}`, background: "none", padding: "6px 12px", fontSize: 12, cursor: "pointer" }}>
+          {showAddForm ? "Cancel" : "+ Add rule"}
+        </button>
+      }>
+        {showAddForm && (
+          <div style={{ border: `1px solid ${C.line}`, padding: 14, marginBottom: 16, background: C.paper }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+              <div>
+                <div style={{ fontSize: 11.5, color: C.sub, marginBottom: 3 }}>Rule key (source block, optionally ::Type)</div>
+                <input value={newRule.source_block} onChange={(e) => setNewRule(p => ({ ...p, source_block: e.target.value }))}
+                  placeholder="e.g. GB:BLOCK_A or EB:LUCKYBALL::profit (50%)"
+                  style={{ ...mono, width: "100%", border: `1px solid ${C.line}`, padding: "7px 9px", fontSize: 12, boxSizing: "border-box" }} />
+              </div>
+              <div>
+                <div style={{ fontSize: 11.5, color: C.sub, marginBottom: 3 }}>Label</div>
+                <input value={newRule.label} onChange={(e) => setNewRule(p => ({ ...p, label: e.target.value }))}
+                  style={{ width: "100%", border: `1px solid ${C.line}`, padding: "7px 9px", fontSize: 13, boxSizing: "border-box" }} />
+              </div>
+              <div>
+                <div style={{ fontSize: 11.5, color: C.sub, marginBottom: 3 }}>Basis</div>
+                <select value={newRule.basis} onChange={(e) => setNewRule(p => ({ ...p, basis: e.target.value }))}
+                  style={{ width: "100%", border: `1px solid ${C.line}`, padding: "7px 9px", fontSize: 13 }}>
+                  <option value="profit">profit</option>
+                  <option value="stake">stake</option>
+                </select>
+              </div>
+              <div>
+                <div style={{ fontSize: 11.5, color: C.sub, marginBottom: 3 }}>Rate (%)</div>
+                <input type="number" value={newRule.rate} onChange={(e) => setNewRule(p => ({ ...p, rate: e.target.value }))}
+                  style={{ width: "100%", border: `1px solid ${C.line}`, padding: "7px 9px", fontSize: 13, boxSizing: "border-box" }} />
+              </div>
+            </div>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, marginBottom: 10, cursor: "pointer" }}>
+              <input type="checkbox" checked={newRule.override_source} onChange={(e) => setNewRule(p => ({ ...p, override_source: e.target.checked }))} />
+              Turn override ON immediately (this rate will replace the sheet's value on save)
+            </label>
+            {addError && <div style={{ color: C.brick, fontSize: 12, marginBottom: 8 }}>{addError}</div>}
+            <button onClick={submitNewRule} disabled={adding} style={{ border: "none", background: C.navy, color: "#fff", padding: "8px 16px", fontSize: 12.5, cursor: "pointer" }}>
+              {adding ? <Loader2 size={13} /> : "Save rule"}
+            </button>
+
+            {Object.keys(typesByBlock).length > 0 && (
+              <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px solid ${C.line}` }}>
+                <div style={{ fontSize: 11.5, color: C.sub, marginBottom: 6 }}>Types seen in your uploaded data (copy the exact key to target one):</div>
+                {Object.entries(typesByBlock).map(([block, types]) => (
+                  <div key={block} style={{ fontSize: 11.5, marginBottom: 3 }}>
+                    <span style={{ ...mono, color: C.ink }}>{block}</span>:{" "}
+                    {Array.from(types).map(t => <span key={t} style={{ ...mono, color: C.sub, marginRight: 8 }}>{block}::{t}</span>)}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {ruleRows.map(rule => {
+          const isEditing = rule.id in editing;
+          const draft = editing[rule.id];
+          return (
+            <div key={rule.id} style={{
+              padding: "12px 0", borderBottom: `1px solid ${C.line}`,
+              borderLeft: rule.override_source ? `3px solid ${C.stamp}` : "3px solid transparent", paddingLeft: 10,
+            }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: 13.5 }}>{rule.label}</div>
+                  <div style={{ ...mono, fontSize: 11, color: C.sub, marginTop: 2 }}>
+                    {rule.source_block} · basis: {rule.basis} · {rule.confidence}
+                  </div>
+                </div>
+                {isEditing ? (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <input type="number" value={draft.rate} onChange={(e) => setEditing(prev => ({ ...prev, [rule.id]: { ...prev[rule.id], rate: e.target.value } }))}
+                      style={{ width: 70, border: `1px solid ${C.line}`, padding: "6px 8px", fontSize: 13 }} />
+                    <span style={{ fontSize: 13, color: C.sub }}>%</span>
+                    <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, color: C.sub, cursor: "pointer" }}>
+                      <input type="checkbox" checked={draft.override} onChange={(e) => setEditing(prev => ({ ...prev, [rule.id]: { ...prev[rule.id], override: e.target.checked } }))} />
+                      Override
+                    </label>
+                    <button onClick={() => saveEdit(rule)} disabled={saving[rule.id]} style={{ border: "none", background: C.emerald, color: "#fff", padding: "6px 12px", fontSize: 12, cursor: "pointer" }}>
+                      {saving[rule.id] ? <Loader2 size={12} /> : "Save"}
+                    </button>
+                    <button onClick={() => cancelEdit(rule.id)} style={{ border: `1px solid ${C.line}`, background: "none", padding: "6px 12px", fontSize: 12, cursor: "pointer" }}>Cancel</button>
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    {rule.override_source && (
+                      <span style={{ fontSize: 10.5, fontWeight: 600, color: "#fff", background: C.stamp, padding: "2px 7px", borderRadius: 3 }}>OVERRIDE ON</span>
+                    )}
+                    <span style={{ ...serif, ...nums, fontSize: 18 }}>{(rule.rate * 100).toFixed(1)}%</span>
+                    <button onClick={() => startEdit(rule)} style={{ border: `1px solid ${C.line}`, background: "none", padding: "6px 12px", fontSize: 12, cursor: "pointer" }}>Edit</button>
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </Panel>
+    </>
+  );
+}
+
+/* ============================================================ Activity log */
+const ACTION_LABELS = {
+  upload: "Uploaded a file", delete_upload: "Deleted an upload", role_change: "Changed a role",
+  log_followup: "Logged a call", resolve_followup: "Resolved a follow-up", reopen_followup: "Reopened a follow-up",
+  delete_followup: "Deleted a follow-up", update_rule: "Changed a commission rule",
+};
+function ActivityTab({ activityLog }) {
+  return (
+    <>
+      <h1 style={{ ...serif, fontSize: 28, fontWeight: 500, margin: "0 0 20px" }}>Activity</h1>
+      {activityLog.length === 0 ? (
+        <Panel><div style={{ fontSize: 13.5, color: C.sub }}>No activity recorded yet.</div></Panel>
+      ) : (
+        <Panel title={`Last ${activityLog.length} action(s)`}>
+          <div style={{ maxHeight: 600, overflowY: "auto" }}>
+            {activityLog.map(entry => (
+              <div key={entry.id} style={{ display: "flex", justifyContent: "space-between", padding: "10px 0", borderBottom: `1px solid ${C.line}`, fontSize: 13 }}>
+                <div>
+                  <span style={{ fontWeight: 600 }}>{entry.actorName}</span>{" "}
+                  <span style={{ color: C.sub }}>{ACTION_LABELS[entry.action] || entry.action}</span>
+                  {entry.details && <div style={{ fontSize: 12, color: C.sub, marginTop: 2 }}>{entry.details}</div>}
+                </div>
+                <div style={{ fontSize: 11.5, color: C.sub, whiteSpace: "nowrap", flexShrink: 0, marginLeft: 12 }}>
+                  {new Date(entry.createdAt).toLocaleString()}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Panel>
+      )}
+    </>
+  );
+}
+
+function UsersTab({ currentUserId, refreshActivity }) {
   const [profiles, setProfiles] = useState(null);
   const [error, setError] = useState(null);
 
@@ -985,8 +1387,13 @@ function UsersTab({ currentUserId }) {
   }, []);
 
   async function changeRole(userId, role) {
+    const target = profiles.find(p => p.id === userId);
     setProfiles(prev => prev.map(p => p.id === userId ? { ...p, role } : p));
-    try { await updateProfileRole(userId, role); }
+    try {
+      await updateProfileRole(userId, role);
+      await logActivity("role_change", `Set ${target?.name || userId}'s role to ${role}`, currentUserId);
+      refreshActivity && refreshActivity();
+    }
     catch (e) { setError(e.message); }
   }
 

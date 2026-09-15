@@ -161,3 +161,48 @@ export async function deleteIntervention(id) {
   const { error } = await supabase.from("interventions").delete().eq("id", id);
   if (error) throw error;
 }
+
+/* ============================================================ commission rules */
+export async function loadCommissionRules() {
+  const { data, error } = await supabase.from("commission_rules").select("*").eq("active", true);
+  if (error) throw error;
+  // Reshape into the { sourceBlock: { basis, rate, confidence, override } } map the engine expects.
+  const rules = {};
+  for (const row of data) {
+    rules[row.source_block] = { basis: row.basis, rate: Number(row.rate), confidence: row.confidence, override: !!row.override_source };
+  }
+  return { rules, rows: data };
+}
+export async function updateCommissionRule(id, patch, userId) {
+  const { error } = await supabase.from("commission_rules")
+    .update({ ...patch, updated_by: userId, updated_at: new Date().toISOString() })
+    .eq("id", id);
+  if (error) throw error;
+}
+export async function addCommissionRule(rule, userId) {
+  const { error } = await supabase.from("commission_rules").insert({ ...rule, updated_by: userId });
+  if (error) throw error;
+}
+
+/* ============================================================ activity log */
+export async function logActivity(action, details, userId) {
+  // Best-effort -- a logging failure should never block the actual action it's describing.
+  try {
+    await supabase.from("activity_log").insert({ actor_id: userId, action, details });
+  } catch (e) {
+    console.error("activity log write failed", e);
+  }
+}
+export async function loadActivityLog(limit = 200) {
+  const [{ data: rows, error }, profiles] = await Promise.all([
+    supabase.from("activity_log").select("*").order("created_at", { ascending: false }).limit(limit),
+    getAllProfiles(),
+  ]);
+  if (error) throw error;
+  const nameById = {};
+  for (const p of profiles) nameById[p.id] = p.name;
+  return rows.map(r => ({
+    id: r.id, actorName: nameById[r.actor_id] || "—", action: r.action,
+    details: r.details, createdAt: r.created_at,
+  }));
+}

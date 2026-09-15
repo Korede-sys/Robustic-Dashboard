@@ -102,6 +102,40 @@ create table interventions (
 create index interventions_agent_idx on interventions(lower(agent_username));
 create index interventions_status_idx on interventions(status);
 
+-- ---------------------------------------------------------------------------
+-- Commission rules: the flat-rate formulas used as a cross-check against the
+-- sheet's own commission column (source is still always what gets paid --
+-- these rules only drive the "does this match?" flag). Editable by admins
+-- without touching code.
+-- ---------------------------------------------------------------------------
+create table commission_rules (
+  id uuid primary key default gen_random_uuid(),
+  source_block text not null unique,
+  label text not null,
+  basis text not null check (basis in ('stake', 'profit')),
+  rate numeric not null check (rate >= 0 and rate <= 1),
+  confidence text not null default 'confirmed',
+  active boolean not null default true,
+  override_source boolean not null default false,
+  updated_by uuid references profiles(id),
+  updated_at timestamptz default now()
+);
+insert into commission_rules (source_block, label, basis, rate, confidence) values
+  ('SP:35PCT', 'Sports — 35% tier', 'profit', 0.35, 'confirmed'),
+  ('SP:POOL', 'Sports — POOL tier', 'profit', 0.15, 'tentative (only 3 samples)');
+
+-- ---------------------------------------------------------------------------
+-- Activity log: who did what, written by the app at the moment each action happens.
+-- ---------------------------------------------------------------------------
+create table activity_log (
+  id bigint generated always as identity primary key,
+  actor_id uuid references profiles(id),
+  action text not null,
+  details text,
+  created_at timestamptz default now()
+);
+create index activity_log_created_idx on activity_log(created_at desc);
+
 -- ============================================================================
 -- Row Level Security -- this is what actually enforces the four roles.
 -- Permission model:
@@ -117,6 +151,8 @@ alter table batches enable row level security;
 alter table line_items enable row level security;
 alter table supplemental_payments enable row level security;
 alter table interventions enable row level security;
+alter table commission_rules enable row level security;
+alter table activity_log enable row level security;
 
 -- profiles: everyone can read all profiles (needed to show names on interventions etc);
 -- only admins can change roles; people can update their own name.
@@ -162,9 +198,28 @@ create policy "admin/finance/manager can update interventions"
 create policy "admin/finance/manager can delete interventions"
   on interventions for delete using (get_my_role() in ('admin', 'finance', 'manager'));
 
+-- commission_rules: everyone can view (needed to run the audit check); only admin can change rates.
+create policy "authenticated can view commission rules"
+  on commission_rules for select using (auth.role() = 'authenticated');
+create policy "admin can insert commission rules"
+  on commission_rules for insert with check (get_my_role() = 'admin');
+create policy "admin can update commission rules"
+  on commission_rules for update using (get_my_role() = 'admin');
+create policy "admin can delete commission rules"
+  on commission_rules for delete using (get_my_role() = 'admin');
+
+-- activity_log: everyone can view (that's the point of an audit trail); people
+-- can only write entries logging their own actions, never as someone else.
+create policy "authenticated can view activity log"
+  on activity_log for select using (auth.role() = 'authenticated');
+create policy "users can log their own actions"
+  on activity_log for insert with check (actor_id = auth.uid());
+
 -- ============================================================================
 -- To start over from scratch, run this block first, then re-run everything above:
 --
+-- drop table if exists activity_log cascade;
+-- drop table if exists commission_rules cascade;
 -- drop table if exists interventions cascade;
 -- drop table if exists supplemental_payments cascade;
 -- drop table if exists line_items cascade;

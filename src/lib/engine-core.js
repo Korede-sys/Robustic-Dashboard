@@ -222,9 +222,12 @@ const PARSERS = { GB: parseGB, EB: parseEB, EB_MB: parseEBMB, SP: parseSP, SP_MB
 /* ============================================================ commission engine
    Formulas below were empirically confirmed against your real August/September
    data (median ratio with ~0 variance across every agent in the block) before
-   being wired in here — see the Formulas tab for the evidence. */
+   being wired in here — see the Formulas tab for the evidence. These are the
+   DEFAULTS, used as a fallback if no live rules are supplied by the caller.
+   The deployed app always passes the current rules from the commission_rules
+   table, so an admin editing a rate there takes effect without a code change. */
 const TYPE_RULE_BLOCKS = new Set(["EB:LUCKYBALL", "EB:LUCKYGREECK", "EB:ROCKET_MAN", "EB_MB:BASE"]);
-const CONFIRMED_BLOCK_RULES = {
+const DEFAULT_BLOCK_RULES = {
   "SP:35PCT": { basis: "profit", rate: 0.35, confidence: "confirmed" },
   "SP:POOL": { basis: "profit", rate: 0.15, confidence: "tentative (only 3 samples)" },
 };
@@ -245,32 +248,39 @@ function parseTypeRate(t) {
   return { basis: m[1].toLowerCase().startsWith("sale") ? "stake" : "profit", rate: parseFloat(m[2]) / 100 };
 }
 
-function computeCommission(item) {
+function computeCommission(item, blockRules = DEFAULT_BLOCK_RULES) {
+  // Lookup priority: an exact "block::type" rule (targets one specific per-agent
+  // rate, e.g. "EB:LUCKYBALL::profit (50%)") beats a whole-block rule, which
+  // beats the default per-agent Type parsing, which beats "no formula known."
   let rule = null;
-  if (item.sourceBlock in CONFIRMED_BLOCK_RULES) {
-    rule = CONFIRMED_BLOCK_RULES[item.sourceBlock];
+  const compositeKey = item.commissionType ? `${item.sourceBlock}::${item.commissionType}` : null;
+  if (compositeKey && compositeKey in blockRules) {
+    rule = blockRules[compositeKey];
+  } else if (item.sourceBlock in blockRules) {
+    rule = blockRules[item.sourceBlock];
   } else if (TYPE_RULE_BLOCKS.has(item.sourceBlock)) {
     const r = parseTypeRate(item.commissionType);
-    if (r) rule = { ...r, confidence: "confirmed (per-agent Type)" };
+    if (r) rule = { ...r, confidence: "confirmed (per-agent Type)", override: false };
   }
-  if (!rule) return { calc: item.commissionAmount, confidence: "unverified — no confirmed formula, using source value", verified: null };
+  if (!rule) return { calc: item.commissionAmount, confidence: "unverified — no confirmed formula, using source value", verified: null, isOverride: false };
+
   const base = rule.basis === "stake" ? item.stake : item.profit;
-  if (base === null || base === undefined) return { calc: item.commissionAmount, confidence: rule.confidence, verified: null };
+  if (base === null || base === undefined) return { calc: item.commissionAmount, confidence: rule.confidence, verified: null, isOverride: false };
   const calc = Math.max(0, base * rule.rate);
   const src = item.commissionAmount ?? 0;
   const diff = src - calc;
   const diffPct = calc ? (diff / calc) * 100 : (src === 0 ? 0 : null);
   const verified = Math.abs(diff) <= 1 || (diffPct !== null && Math.abs(diffPct) <= 0.5);
-  return { calc, confidence: rule.confidence, verified, diff, diffPct };
+  return { calc, confidence: rule.confidence, verified, diff, diffPct, isOverride: !!rule.override };
 }
 
 /* ============================================================ aggregation */
-function aggregateBatches(batches) {
+function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES) {
   const agentMap = new Map();
   const productAgg = new Map();
   const stateAgg = new Map();
   const mismatches = [];
-  let verifiedCount = 0, unverifiedCount = 0, mismatchCount = 0;
+  let verifiedCount = 0, unverifiedCount = 0, mismatchCount = 0, overrideCount = 0;
 
   const PRODUCT_OF = (block) => {
     if (block.startsWith("GB:")) return "Globalbet Virtual";
@@ -287,8 +297,15 @@ function aggregateBatches(batches) {
     for (const item of batch.items) {
       if (EXCLUDED_BLOCKS.has(item.sourceBlock) || !STRUCTURALLY_TRUSTED.has(item.sourceBlock)) continue;
       if (item.isHouse) continue;
-      const { calc, confidence, verified, diff, diffPct } = computeCommission(item);
-      if (verified === true) verifiedCount++;
+      const { calc, confidence, verified, diff, diffPct, isOverride } = computeCommission(item, blockRules);
+      // The payable commission is the sheet's own value UNLESS a rule's override
+      // is explicitly turned on for this block/type -- in which case the
+      // calculated value replaces it. This is the one place "source is always
+      // authoritative" can be deliberately overridden, and only because someone
+      // flipped a switch, never silently.
+      const payableCommission = isOverride ? calc : (item.commissionAmount || 0);
+      if (isOverride) overrideCount++;
+      else if (verified === true) verifiedCount++;
       else if (verified === false) { mismatchCount++; mismatches.push({ agent: item.agentUsername, block: item.sourceBlock, type: item.commissionType, source: item.commissionAmount, calculated: calc, diff, diffPct, batch: batch.filename }); }
       else unverifiedCount++;
 
@@ -298,29 +315,33 @@ function aggregateBatches(batches) {
         agentMap.set(key, {
           username: item.agentUsername, state: meta.stateName, channel: meta.channel,
           tickets: 0, stake: 0, payout: 0, profit: 0, sourceCommission: 0, calcCommission: 0,
-          monthlyBonus: 0, products: new Set(), allVerified: true,
+          monthlyBonus: 0, products: new Set(), allVerified: true, hasOverride: false,
         });
       }
       const a = agentMap.get(key);
       a.tickets += item.tickets || 0; a.stake += item.stake || 0; a.payout += item.payout || 0;
-      a.profit += item.profit || 0; a.sourceCommission += item.commissionAmount || 0;
+      a.profit += item.profit || 0; a.sourceCommission += payableCommission;
       a.calcCommission += calc || 0;
-      if (verified === false) a.allVerified = false;
+      if (verified === false && !isOverride) a.allVerified = false;
+      if (isOverride) a.hasOverride = true;
       const prod = PRODUCT_OF(item.sourceBlock);
       a.products.add(prod);
 
       if (!productAgg.has(prod)) productAgg.set(prod, { name: prod, stake: 0, payout: 0, profit: 0, commission: 0 });
       const p = productAgg.get(prod);
-      p.stake += item.stake || 0; p.payout += item.payout || 0; p.profit += item.profit || 0; p.commission += item.commissionAmount || 0;
+      p.stake += item.stake || 0; p.payout += item.payout || 0; p.profit += item.profit || 0; p.commission += payableCommission;
 
       const st = meta.stateName || "Unknown";
       if (!stateAgg.has(st)) stateAgg.set(st, { state: st, stake: 0, payout: 0, profit: 0, commission: 0, agents: new Set() });
       const s = stateAgg.get(st);
-      s.stake += item.stake || 0; s.payout += item.payout || 0; s.profit += item.profit || 0; s.commission += item.commissionAmount || 0;
+      s.stake += item.stake || 0; s.payout += item.payout || 0; s.profit += item.profit || 0; s.commission += payableCommission;
       s.agents.add(key);
     }
     for (const supp of batch.supplemental) {
-      if (supp.type !== "monthly_bonus") continue;
+      // Every supplemental payment type counts here -- bonus, palliative, gift,
+      // and monthly_bonus all represent money owed beyond commission. Filtering
+      // to only "monthly_bonus" silently dropped Globalbet's bonus/palliative/gift
+      // and Luckygreek's bonus, which is a real omission, not intentional scope.
       const key = supp.agentUsername.toLowerCase();
       if (!agentMap.has(key)) continue;
       agentMap.get(key).monthlyBonus += supp.amount || 0;
@@ -335,7 +356,7 @@ function aggregateBatches(batches) {
 
   return {
     agents, products, states, mismatches,
-    stats: { verifiedCount, unverifiedCount, mismatchCount },
+    stats: { verifiedCount, unverifiedCount, mismatchCount, overrideCount },
     totals: {
       stake: agents.reduce((s, a) => s + a.stake, 0), payout: agents.reduce((s, a) => s + a.payout, 0),
       profit: agents.reduce((s, a) => s + a.profit, 0), commission: agents.reduce((s, a) => s + a.sourceCommission, 0),
@@ -423,5 +444,5 @@ function toCSV(rows, columns) {
 
 export {
   PARSERS, detectFileType, aggregateBatches, computeCommission, computeTrends, computeBatchSeries,
-  decodeAgent, money, toCSV, EXCLUDED_BLOCKS, STRUCTURALLY_TRUSTED,
+  decodeAgent, money, toCSV, EXCLUDED_BLOCKS, STRUCTURALLY_TRUSTED, DEFAULT_BLOCK_RULES,
 };

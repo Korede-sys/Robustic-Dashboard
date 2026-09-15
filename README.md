@@ -6,6 +6,14 @@ parsing/commission logic (`src/lib/engine-core.js`) is unchanged from the
 version already validated against your real files — only the storage layer
 and auth are new.
 
+## Already deployed this before? Run the new migration
+
+If you already set up the schema from an earlier version, don't re-run
+`schema.sql` — it would try to recreate tables that already hold your real
+data. Instead, run `schema_v2_rules_and_activity.sql` in the SQL Editor. It
+only adds two new tables (`commission_rules`, `activity_log`) and doesn't
+touch anything else.
+
 ## 1. Create the Supabase project
 
 1. Go to [supabase.com](https://supabase.com), create a new project (pick any
@@ -68,7 +76,25 @@ rejects it even if someone bypassed the UI (Row Level Security in
 | Upload / delete files | ✓ | ✓ | | |
 | Clean Export | ✓ | ✓ | | |
 | Needs Attention & Follow-ups | ✓ | ✓ | ✓ | |
+| Edit commission rules | ✓ | | | |
 | Manage team & roles | ✓ | | | |
+| View Activity log | ✓ | ✓ | ✓ | ✓ |
+
+## What's new in this version
+
+- **Preview before saving** — uploading now parses and shows you totals
+  (agent count, stake, commission, bonus) plus a row count per block *before*
+  anything is written to the database. Nothing is saved until you confirm.
+  This is what would have caught the Globalbet double-counting bug before it
+  ever became "official" data.
+- **Editable commission rules** — the flat-rate formulas used as an audit
+  cross-check (currently just Sports' 35% and POOL tiers) live in the
+  `commission_rules` table now, editable from the **Rules** tab (admin only).
+  Changing a rate only affects the mismatch-flagging — the sheet's own
+  commission value is still always what gets paid, by design.
+- **Activity log** — every upload, deletion, role change, and follow-up
+  action is now recorded with who did it and when, visible to everyone on
+  the **Activity** tab.
 
 ## What's still true from before
 

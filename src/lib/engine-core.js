@@ -327,7 +327,7 @@ function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES) {
         agentMap.set(key, {
           username: item.agentUsername, state: meta.stateName, channel: meta.channel,
           tickets: 0, stake: 0, payout: 0, profit: 0, sourceCommission: 0, calcCommission: 0,
-          monthlyBonus: 0, products: new Set(), allVerified: true, hasOverride: false,
+          monthlyBonus: 0, bonus: 0, palliative: 0, gift: 0, products: new Set(), allVerified: true, hasOverride: false,
           totalEarnings: null, balance: null, avgStake: null,
         });
       }
@@ -356,13 +356,18 @@ function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES) {
       s.agents.add(key);
     }
     for (const supp of batch.supplemental) {
-      // Every supplemental payment type counts here -- bonus, palliative, gift,
-      // and monthly_bonus all represent money owed beyond commission. Filtering
-      // to only "monthly_bonus" silently dropped Globalbet's bonus/palliative/gift
-      // and Luckygreek's bonus, which is a real omission, not intentional scope.
+      // Every supplemental payment type counts toward monthlyBonus (the combined
+      // total used everywhere else) -- but bonus/palliative/gift are also tracked
+      // individually so each can be checked against the sheet on its own, not just
+      // as one blended number.
       const key = supp.agentUsername.toLowerCase();
       if (!agentMap.has(key)) continue;
-      agentMap.get(key).monthlyBonus += supp.amount || 0;
+      const a = agentMap.get(key);
+      const amt = supp.amount || 0;
+      a.monthlyBonus += amt;
+      if (supp.type === "bonus") a.bonus += amt;
+      else if (supp.type === "palliative") a.palliative += amt;
+      else if (supp.type === "gift") a.gift += amt;
     }
   }
 

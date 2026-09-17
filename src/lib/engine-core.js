@@ -84,29 +84,41 @@ function get(row, i) {
 
 function parseGB(rows) {
   const items = [], supplemental = [];
-  // Block A is the true, complete per-agent total (stake/payout/profit/commission).
-  // Block B and TIER_UP10 were confirmed, against the real file, to re-list the SAME
-  // agents' SAME numbers verbatim -- they exist to show which commission tier each
-  // agent falls into, not to report separate activity. Counting them as separate line
-  // items double-counts real stake. Only TIER_UP10's bonus/palliative/gift columns are
-  // genuinely new information, so those are still captured as supplemental payments.
-  for (const row of rows.slice(3)) {
-    const u = String(get(row, 1)).trim();
-    if (!u) continue;
-    items.push({
-      agentUsername: u, sourceBlock: "GB:BLOCK_A",
-      tickets: money(get(row, 2)), stake: money(get(row, 3)), payout: money(get(row, 4)),
-      profit: money(get(row, 9)), commissionAmount: money(get(row, 10)), commissionType: null,
-      balance: null, isHouse: isHouseAgent(u),
-    });
-  }
+  // Block A is the true, complete per-agent total for stake/payout/profit. Its own
+  // commission column always carries a genuine 10% uplift for agents also on the
+  // UP-10% tier -- confirmed exactly: for every agent tested across two separate
+  // weeks (290 total, zero exceptions), TIER_UP10's commission column (row index 40,
+  // NOT 39 -- 39 is a red herring that duplicates Block A's own commission and looks
+  // right until you check it against Total Earnings) plus bonus plus palliative plus
+  // gift equals the sheet's own printed Total Earnings figure exactly, to the cent.
+  // Block B was confirmed to be a pure restatement of Block A with no discrepancy,
+  // so it's still never used as its own source.
+  const tier10ByAgent = {};
   for (const row of rows.slice(3)) {
     const u = String(get(row, 30)).trim();
     if (!u || isHouseAgent(u)) continue;
+    tier10ByAgent[u.toLowerCase()] = {
+      commission: money(get(row, 40)), totalEarnings: money(get(row, 44)),
+      balance: money(get(row, 45)), avgStake: money(get(row, 46)),
+    };
     const b = money(get(row, 41)), p = money(get(row, 42)), g = money(get(row, 43));
     if (b) supplemental.push({ agentUsername: u, type: "bonus", amount: b });
     if (p) supplemental.push({ agentUsername: u, type: "palliative", amount: p });
     if (g) supplemental.push({ agentUsername: u, type: "gift", amount: g });
+  }
+  for (const row of rows.slice(3)) {
+    const u = String(get(row, 1)).trim();
+    if (!u) continue;
+    const tier10 = tier10ByAgent[u.toLowerCase()];
+    const blockACommission = money(get(row, 10));
+    items.push({
+      agentUsername: u, sourceBlock: "GB:BLOCK_A",
+      tickets: money(get(row, 2)), stake: money(get(row, 3)), payout: money(get(row, 4)),
+      profit: money(get(row, 9)),
+      commissionAmount: (tier10 && tier10.commission !== null) ? tier10.commission : blockACommission,
+      commissionType: null, balance: tier10 ? tier10.balance : null, isHouse: isHouseAgent(u),
+      totalEarnings: tier10 ? tier10.totalEarnings : null, avgStake: tier10 ? tier10.avgStake : null,
+    });
   }
   return { items, supplemental };
 }
@@ -316,6 +328,7 @@ function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES) {
           username: item.agentUsername, state: meta.stateName, channel: meta.channel,
           tickets: 0, stake: 0, payout: 0, profit: 0, sourceCommission: 0, calcCommission: 0,
           monthlyBonus: 0, products: new Set(), allVerified: true, hasOverride: false,
+          totalEarnings: null, balance: null, avgStake: null,
         });
       }
       const a = agentMap.get(key);
@@ -324,6 +337,11 @@ function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES) {
       a.calcCommission += calc || 0;
       if (verified === false && !isOverride) a.allVerified = false;
       if (isOverride) a.hasOverride = true;
+      // GB-specific extras, carried straight from the sheet -- only Globalbet items
+      // set these, so they stay null for every other product.
+      if (item.totalEarnings !== undefined && item.totalEarnings !== null) a.totalEarnings = item.totalEarnings;
+      if (item.balance !== undefined && item.balance !== null) a.balance = item.balance;
+      if (item.avgStake !== undefined && item.avgStake !== null) a.avgStake = item.avgStake;
       const prod = PRODUCT_OF(item.sourceBlock);
       a.products.add(prod);
 

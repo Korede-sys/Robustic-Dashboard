@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 
 import {
-  PARSERS, detectFileType, aggregateBatches, computeTrends, computeBatchSeries, toCSV,
+  PARSERS, detectFileType, detectPeriod, aggregateBatches, computeTrends, computeBatchSeries, toCSV,
 } from "./lib/engine-core";
 import { parseCSV } from "./lib/csvparse";
 import { can } from "./lib/permissions";
@@ -76,7 +76,7 @@ function downloadCSV(filename, rows, columns) {
 const ALL_NAV = [
   { id: "upload", label: "Upload & Process", icon: Upload, action: "upload", section: "Work" },
   { id: "overview", label: "Overview", icon: LayoutGrid, action: "view_reports", section: "Reporting" },
-  { id: "agents", label: "Agents", icon: Users, action: "view_reports", section: "Reporting" },
+  { id: "agents", label: "Agent Breakdown", icon: Users, action: "view_reports", section: "Reporting" },
   { id: "products", label: "Products", icon: Package, action: "view_reports", section: "Reporting" },
   { id: "states", label: "States", icon: MapPin, action: "view_reports", section: "Reporting" },
   { id: "trends", label: "Trends", icon: TrendingUp, action: "view_reports", section: "Reporting" },
@@ -163,7 +163,11 @@ export default function App() {
       const text = await pf.file.text();
       const rows = parseCSV(text);
       const { items, supplemental } = PARSERS[pf.detectedType](rows);
-      parsedBatches.push({ type: pf.detectedType, filename: pf.name, items, supplemental });
+      const period = detectPeriod(pf.name, pf.detectedType, rows);
+      parsedBatches.push({
+        type: pf.detectedType, filename: pf.name, items, supplemental,
+        periodStart: period.periodStart, periodEnd: period.periodEnd, periodConfidence: period.confidence,
+      });
     }
     const agg = aggregateBatches(parsedBatches, rules);
     // Per-file, per-block item counts -- the direct way to spot a double-counting
@@ -324,7 +328,7 @@ export default function App() {
             {tab === "upload" && can(profile.role, "upload") && (
               <UploadTab pendingFiles={pendingFiles} setPendingFiles={setPendingFiles} handleFiles={handleFiles}
                 parseAllPending={parseAllPending} confirmSave={confirmSave} cancelPreview={cancelPreview}
-                previewData={previewData} processing={processing} fileInputRef={fileInputRef} hasHistory={batches.length > 0} />
+                previewData={previewData} setPreviewData={setPreviewData} processing={processing} fileInputRef={fileInputRef} hasHistory={batches.length > 0} />
             )}
             {tab !== "upload" && tab !== "history" && tab !== "formulas" && tab !== "trends" && tab !== "followups" && tab !== "users" && tab !== "rules" && tab !== "activity" && batches.length > 0 && (
               <PeriodSelector batches={batches} selectedKeys={selectedKeys} setSelectedKeys={setSelectedKeys} />
@@ -332,7 +336,7 @@ export default function App() {
             {tab === "overview" && <OverviewTab agg={agg} trends={trends} hasData={batches.length > 0} />}
             {tab === "agents" && <AgentsTab agg={agg} trends={trends} />}
             {tab === "products" && <ProductsTab agg={agg} />}
-            {tab === "states" && <StatesTab agg={agg} />}
+            {tab === "states" && <StatesTab agg={agg} trends={trends} />}
             {tab === "trends" && <TrendsTab series={series} />}
             {tab === "lowactivity" && can(profile.role, "manage_followups") && (
               <LowActivityTab agg={agg} trends={trends} onCall={setCallAgent} />
@@ -400,11 +404,18 @@ function PeriodSelector({ batches, selectedKeys, setSelectedKeys }) {
 }
 
 /* ============================================================ Upload tab */
-function UploadTab({ pendingFiles, setPendingFiles, handleFiles, parseAllPending, confirmSave, cancelPreview, previewData, processing, fileInputRef, hasHistory }) {
+function UploadTab({ pendingFiles, setPendingFiles, handleFiles, parseAllPending, confirmSave, cancelPreview, previewData, setPreviewData, processing, fileInputRef, hasHistory }) {
   const [dragOver, setDragOver] = useState(false);
 
+  function updatePeriod(index, field, value) {
+    setPreviewData(prev => {
+      const parsedBatches = prev.parsedBatches.map((b, i) => i === index ? { ...b, [field]: value } : b);
+      return { ...prev, parsedBatches };
+    });
+  }
+
   if (previewData) {
-    const { agg, blockCounts } = previewData;
+    const { agg, blockCounts, parsedBatches } = previewData;
     return (
       <>
         <h1 style={{ ...serif, fontSize: 28, fontWeight: 500, margin: "0 0 20px" }}>Review before saving</h1>
@@ -413,6 +424,25 @@ function UploadTab({ pendingFiles, setPendingFiles, handleFiles, parseAllPending
             Nothing has been saved yet. Check these totals against the sheet's own numbers before confirming —
             this is the point where a parsing problem is cheap to catch, not after it's part of your reports.
           </div>
+        </Panel>
+        <Panel title="Reporting period">
+          <div style={{ fontSize: 12.5, color: C.sub, marginBottom: 12 }}>
+            This is what drives date filters and trends — not when you upload, but the actual week/month this
+            data covers. Confirm or correct it for each file below.
+          </div>
+          {parsedBatches.map((b, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: i < parsedBatches.length - 1 ? `1px solid ${C.line}` : "none" }}>
+              <div style={{ flex: 1, fontSize: 13, fontWeight: 500 }}>{b.filename}</div>
+              <input type="date" value={b.periodStart || ""} onChange={(e) => updatePeriod(i, "periodStart", e.target.value)}
+                style={{ border: `1px solid ${C.line}`, padding: "6px 8px", fontSize: 12.5 }} />
+              <span style={{ color: C.sub, fontSize: 12 }}>to</span>
+              <input type="date" value={b.periodEnd || ""} onChange={(e) => updatePeriod(i, "periodEnd", e.target.value)}
+                style={{ border: `1px solid ${C.line}`, padding: "6px 8px", fontSize: 12.5 }} />
+              <span style={{ fontSize: 11, color: b.periodConfidence?.includes("sheet") ? C.emerald : C.amber, whiteSpace: "nowrap" }}>
+                {b.periodConfidence}
+              </span>
+            </div>
+          ))}
         </Panel>
         <div style={{ display: "flex", gap: 14, marginBottom: 20 }}>
           <Kpi label="Agents" value={agg.agents.length} />
@@ -596,10 +626,12 @@ function AgentsTab({ agg, trends }) {
   const filtered = useMemo(() =>
     agg.agents.filter(a => a.username.toLowerCase().includes(q.toLowerCase()) || a.state.toLowerCase().includes(q.toLowerCase())),
     [q, agg.agents]);
+  const { sorted, sortKey, sortDir, toggleSort } = useSort(filtered, "stake", "desc");
   if (agg.agents.length === 0) return <EmptyState />;
+  const dash = (v) => v === null || v === undefined ? "—" : naira(v);
   return (
     <>
-      <h1 style={{ ...serif, fontSize: 28, fontWeight: 500, margin: "0 0 20px" }}>Agent Performance</h1>
+      <h1 style={{ ...serif, fontSize: 28, fontWeight: 500, margin: "0 0 20px" }}>Agent Breakdown</h1>
       <Panel title={`${agg.agents.length} agents with activity`} right={
         <div style={{ display: "flex", alignItems: "center", gap: 6, border: `1px solid ${C.line}`, padding: "4px 8px" }}>
           <Search size={13} color={C.sub} />
@@ -607,27 +639,47 @@ function AgentsTab({ agg, trends }) {
             style={{ border: "none", outline: "none", fontSize: 12.5, width: 160 }} />
         </div>
       }>
-        <div style={{ maxHeight: 560, overflowY: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <div style={{ fontSize: 11.5, color: C.sub, marginBottom: 10 }}>
+          Bonus/Palliative/Gift/Avg Stake/Total Earnings are Globalbet-specific — shown as "—" for other products.
+          Commission already reflects the confirmed uplift where one applies, so it doesn't need its own separate column.
+        </div>
+        <div style={{ maxHeight: 560, overflow: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 1280 }}>
             <thead style={{ position: "sticky", top: 0, background: C.panel }}>
               <tr style={{ textAlign: "left", color: C.sub, fontSize: 11.5 }}>
-                {["Rank", "Agent", "State", "Stake", "Payout", "Profit", "Commission", "Trend", "Products"].map(h => (
-                  <th key={h} style={{ padding: "6px 8px", borderBottom: `1px solid ${C.line}`, fontWeight: 500 }}>{h}</th>
-                ))}
+                <th style={{ padding: "6px 8px", borderBottom: `1px solid ${C.line}`, fontWeight: 500 }}>Rank</th>
+                <SortableTh label="Agent" field="username" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortableTh label="State" field="state" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortableTh label="Stake" field="stake" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortableTh label="Avg Stake" field="avgStake" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortableTh label="Payout" field="payout" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortableTh label="Profit" field="profit" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortableTh label="Commission" field="sourceCommission" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortableTh label="Bonus" field="bonus" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortableTh label="Palliative" field="palliative" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortableTh label="Gift" field="gift" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortableTh label="Total Earnings" field="totalEarnings" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <th style={{ padding: "6px 8px", borderBottom: `1px solid ${C.line}`, fontWeight: 500, whiteSpace: "nowrap" }}>Trend</th>
+                <th style={{ padding: "6px 8px", borderBottom: `1px solid ${C.line}`, fontWeight: 500, whiteSpace: "nowrap" }}>Products</th>
               </tr>
             </thead>
             <tbody>
-              {filtered.slice(0, 150).map(a => (
+              {sorted.slice(0, 150).map(a => (
                 <tr key={a.username}>
                   <td style={{ padding: "8px", borderBottom: `1px solid ${C.line}`, color: C.sub }}>#{a.rank}</td>
-                  <td style={{ ...mono, padding: "8px", borderBottom: `1px solid ${C.line}`, fontWeight: 500, fontSize: 12.5 }}>{a.username}</td>
+                  <td style={{ ...mono, padding: "8px", borderBottom: `1px solid ${C.line}`, fontWeight: 500, fontSize: 12.5, whiteSpace: "nowrap" }}>{a.username}</td>
                   <td style={{ padding: "8px", borderBottom: `1px solid ${C.line}`, color: C.sub }}>{a.state}</td>
                   <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}` }}>{naira(a.stake)}</td>
+                  <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}`, color: C.sub }}>{dash(a.avgStake)}</td>
                   <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}` }}>{naira(a.payout)}</td>
                   <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}`, color: a.profit < 0 ? C.brick : C.ink }}>{naira(a.profit)}</td>
                   <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}` }}>{naira(a.sourceCommission)}</td>
+                  <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}`, color: C.sub }}>{a.bonus ? naira(a.bonus) : "—"}</td>
+                  <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}`, color: C.sub }}>{a.palliative ? naira(a.palliative) : "—"}</td>
+                  <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}`, color: C.sub }}>{a.gift ? naira(a.gift) : "—"}</td>
+                  <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}`, fontWeight: 600 }}>{dash(a.totalEarnings)}</td>
                   <td style={{ padding: "8px", borderBottom: `1px solid ${C.line}` }}><TrendBadge username={a.username} trends={trends} /></td>
-                  <td style={{ padding: "8px", borderBottom: `1px solid ${C.line}`, color: C.sub, fontSize: 11.5 }}>{a.products.join(", ")}</td>
+                  <td style={{ padding: "8px", borderBottom: `1px solid ${C.line}`, color: C.sub, fontSize: 11.5, whiteSpace: "nowrap" }}>{a.products.join(", ")}</td>
                 </tr>
               ))}
             </tbody>
@@ -678,33 +730,51 @@ function ProductsTab({ agg }) {
 }
 
 /* ============================================================ States */
-function StatesTab({ agg }) {
+function StatesTab({ agg, trends }) {
+  const withAvg = agg.states.map(s => ({ ...s, avgPerAgent: s.stake / Math.max(1, s.agentCount) }));
+  const { sorted, sortKey, sortDir, toggleSort } = useSort(withAvg, "stake", "desc");
   if (agg.states.length === 0) return <EmptyState />;
   return (
     <>
       <h1 style={{ ...serif, fontSize: 28, fontWeight: 500, margin: "0 0 20px" }}>State Performance</h1>
-      <Panel title="All states">
+      <Panel title="All states — click a column to sort">
         <div style={{ maxHeight: 560, overflowY: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead style={{ position: "sticky", top: 0, background: C.panel }}>
               <tr style={{ textAlign: "left", color: C.sub, fontSize: 11.5 }}>
-                {["State", "Agents", "Stake", "Payout", "Profit", "Avg / agent", "Commission"].map(h => (
-                  <th key={h} style={{ padding: "6px 8px", borderBottom: `1px solid ${C.line}`, fontWeight: 500 }}>{h}</th>
-                ))}
+                <SortableTh label="State" field="state" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortableTh label="Agents" field="agentCount" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortableTh label="Stake" field="stake" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortableTh label="Payout" field="payout" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortableTh label="Profit" field="profit" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortableTh label="Avg / agent" field="avgPerAgent" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortableTh label="Commission" field="commission" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <th style={{ padding: "6px 8px", borderBottom: `1px solid ${C.line}`, fontWeight: 500 }}>Trend</th>
               </tr>
             </thead>
             <tbody>
-              {agg.states.map(s => (
-                <tr key={s.state}>
-                  <td style={{ padding: "8px", borderBottom: `1px solid ${C.line}`, fontWeight: 500 }}>{s.state}</td>
-                  <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}` }}>{s.agentCount}</td>
-                  <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}` }}>{naira(s.stake)}</td>
-                  <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}` }}>{naira(s.payout)}</td>
-                  <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}`, color: s.profit < 0 ? C.brick : C.ink }}>{naira(s.profit)}</td>
-                  <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}` }}>{naira(s.stake / Math.max(1, s.agentCount))}</td>
-                  <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}` }}>{naira(s.commission)}</td>
-                </tr>
-              ))}
+              {sorted.map(s => {
+                const t = trends.stateTrend[s.state];
+                return (
+                  <tr key={s.state}>
+                    <td style={{ padding: "8px", borderBottom: `1px solid ${C.line}`, fontWeight: 500 }}>{s.state}</td>
+                    <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}` }}>{s.agentCount}</td>
+                    <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}` }}>{naira(s.stake)}</td>
+                    <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}` }}>{naira(s.payout)}</td>
+                    <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}`, color: s.profit < 0 ? C.brick : C.ink }}>{naira(s.profit)}</td>
+                    <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}` }}>{naira(s.avgPerAgent)}</td>
+                    <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}` }}>{naira(s.commission)}</td>
+                    <td style={{ padding: "8px", borderBottom: `1px solid ${C.line}` }}>
+                      {t && t.deltaPct !== null && t.deltaPct !== undefined ? (
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: 3, fontSize: 12, ...nums, color: Math.abs(t.deltaPct) < 0.5 ? C.sub : (t.deltaPct > 0 ? C.emerald : C.brick) }}>
+                          {Math.abs(t.deltaPct) < 0.5 ? <Minus size={11} /> : (t.deltaPct > 0 ? <ArrowUp size={11} /> : <ArrowDown size={11} />)}
+                          {Math.abs(t.deltaPct).toFixed(1)}%
+                        </span>
+                      ) : <span style={{ ...nums, color: C.sub, fontSize: 12 }}>—</span>}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -1438,6 +1508,40 @@ function UsersTab({ currentUserId, refreshActivity }) {
         ))}
       </Panel>
     </>
+  );
+}
+
+/* ============================================================ sorting helpers */
+function useSort(list, defaultKey, defaultDir = "desc") {
+  const [sortKey, setSortKey] = useState(defaultKey);
+  const [sortDir, setSortDir] = useState(defaultDir);
+  const sorted = useMemo(() => {
+    const copy = [...list];
+    copy.sort((a, b) => {
+      let av = a[sortKey], bv = b[sortKey];
+      if (typeof av === "string") { av = av.toLowerCase(); bv = (bv || "").toLowerCase(); }
+      if (av === bv) return 0;
+      if (av === null || av === undefined) return 1;
+      if (bv === null || bv === undefined) return -1;
+      return sortDir === "asc" ? (av < bv ? -1 : 1) : (av > bv ? -1 : 1);
+    });
+    return copy;
+  }, [list, sortKey, sortDir]);
+  function toggleSort(key) {
+    if (key === sortKey) setSortDir(d => d === "asc" ? "desc" : "asc");
+    else { setSortKey(key); setSortDir("desc"); }
+  }
+  return { sorted, sortKey, sortDir, toggleSort };
+}
+function SortableTh({ label, field, sortKey, sortDir, onSort }) {
+  const active = field === sortKey;
+  return (
+    <th onClick={() => onSort(field)} style={{
+      padding: "6px 8px", borderBottom: `1px solid ${C.line}`, fontWeight: active ? 700 : 500,
+      cursor: "pointer", whiteSpace: "nowrap", userSelect: "none", color: active ? C.ink : C.sub,
+    }}>
+      {label}{active && (sortDir === "asc" ? " ↑" : " ↓")}
+    </th>
   );
 }
 

@@ -75,6 +75,50 @@ const FILE_TYPE_LABELS = {
   EB_MB: "Luckyball Monthly Bonus", SP: "Sports (weekly)", SP_MB: "Sport Monthly Bonus",
 };
 
+const MONTH_NAMES = { january:0, february:1, march:2, april:3, may:4, june:5, july:6, august:7, september:8, october:9, november:10, december:11 };
+function pad2(n) { return String(n).padStart(2, "0"); }
+function toISODate(d) { return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; }
+function addDays(d, n) { const r = new Date(d); r.setDate(r.getDate() + n); return r; }
+function lastDayOfMonth(year, monthIndex) { return new Date(year, monthIndex + 1, 0); }
+
+/* ============================================================ period detection
+   Only Globalbet's own sheet embeds a real date range ("from 2026-08-31 to
+   2026-09-07") -- every other product has nothing in the data itself, so this
+   falls back to the filename's date, which is always one day AFTER the actual
+   period end (it's the report-generation date, confirmed across multiple real
+   files). This is a best-guess, not a certainty -- the caller should always
+   let the uploader confirm or correct it before it's saved. */
+function detectPeriod(filename, type, rows) {
+  if (type === "GB" && rows && rows[0]) {
+    const text = rows[0].join(" ");
+    const m = /from\s+(\d{4}-\d{2}-\d{2}).*?to\s+(\d{4}-\d{2}-\d{2})/i.exec(text);
+    if (m) return { periodStart: m[1], periodEnd: m[2], confidence: "read from the sheet itself" };
+  }
+  // Monthly products: filename carries "MONTH_YYYY" (e.g. "AUGUST_2026").
+  if (type === "EB_MB" || type === "SP_MB") {
+    const m = /([A-Za-z]+)_?\s*(\d{4})/.exec(filename);
+    if (m && MONTH_NAMES[m[1].toLowerCase()] !== undefined) {
+      const monthIdx = MONTH_NAMES[m[1].toLowerCase()], year = parseInt(m[2], 10);
+      return {
+        periodStart: toISODate(new Date(year, monthIdx, 1)),
+        periodEnd: toISODate(lastDayOfMonth(year, monthIdx)),
+        confidence: "guessed from filename -- please confirm",
+      };
+    }
+    return { periodStart: null, periodEnd: null, confidence: "couldn't guess -- please enter" };
+  }
+  // Weekly products (GB fallback, EB, SP): filename carries a DD-MM-YYYY date,
+  // which real examples confirm is generation-day = period end + 1 day.
+  const m = /(\d{2})-(\d{2})-(\d{4})/.exec(filename);
+  if (m) {
+    const genDate = new Date(parseInt(m[3], 10), parseInt(m[2], 10) - 1, parseInt(m[1], 10));
+    const periodEnd = addDays(genDate, -1);
+    const periodStart = addDays(periodEnd, -7);
+    return { periodStart: toISODate(periodStart), periodEnd: toISODate(periodEnd), confidence: "guessed from filename -- please confirm" };
+  }
+  return { periodStart: null, periodEnd: null, confidence: "couldn't guess -- please enter" };
+}
+
 /* ============================================================ block parsers
    Column offsets ported 1:1 from the parser validated against real exports. */
 function get(row, i) {
@@ -394,39 +438,57 @@ function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES) {
 function computeTrends(batches) {
   const byType = {};
   for (const b of batches) (byType[b.type] ||= []).push(b);
-  for (const t in byType) byType[t].sort((a, b) => new Date(a.uploadedAt) - new Date(b.uploadedAt));
+  // Sort by the real reporting period now that we have one, not upload order --
+  // someone uploading an older week's file after a newer one shouldn't scramble
+  // which period counts as "latest" for trend comparison.
+  const sortKey = (b) => new Date(b.periodStart || b.uploadedAt);
+  for (const t in byType) byType[t].sort((a, b) => sortKey(a) - sortKey(b));
 
   const agentTrend = {};
+  const stateTrend = {};
   let hasEnoughData = false;
 
-  const stakeByAgent = (batch) => {
-    const m = {};
+  const stakeByAgentAndState = (batch) => {
+    const byAgent = {}, byState = {};
     for (const item of batch.items) {
       if (EXCLUDED_BLOCKS.has(item.sourceBlock) || !STRUCTURALLY_TRUSTED.has(item.sourceBlock) || item.isHouse) continue;
       const key = item.agentUsername.toLowerCase();
-      m[key] = (m[key] || 0) + (item.stake || 0);
+      byAgent[key] = (byAgent[key] || 0) + (item.stake || 0);
+      const state = decodeAgent(item.agentUsername).stateName || "Unknown";
+      byState[state] = (byState[state] || 0) + (item.stake || 0);
     }
-    return m;
+    return { byAgent, byState };
   };
 
   for (const type in byType) {
     const list = byType[type];
     if (list.length < 2) continue;
     hasEnoughData = true;
-    const latestM = stakeByAgent(list[list.length - 1]);
-    const prevM = stakeByAgent(list[list.length - 2]);
-    const agents = new Set([...Object.keys(latestM), ...Object.keys(prevM)]);
+    const latest = stakeByAgentAndState(list[list.length - 1]);
+    const prev = stakeByAgentAndState(list[list.length - 2]);
+
+    const agents = new Set([...Object.keys(latest.byAgent), ...Object.keys(prev.byAgent)]);
     for (const u of agents) {
       if (!agentTrend[u]) agentTrend[u] = { latestStake: 0, prevStake: 0 };
-      agentTrend[u].latestStake += latestM[u] || 0;
-      agentTrend[u].prevStake += prevM[u] || 0;
+      agentTrend[u].latestStake += latest.byAgent[u] || 0;
+      agentTrend[u].prevStake += prev.byAgent[u] || 0;
+    }
+    const states = new Set([...Object.keys(latest.byState), ...Object.keys(prev.byState)]);
+    for (const s of states) {
+      if (!stateTrend[s]) stateTrend[s] = { latestStake: 0, prevStake: 0 };
+      stateTrend[s].latestStake += latest.byState[s] || 0;
+      stateTrend[s].prevStake += prev.byState[s] || 0;
     }
   }
   for (const u in agentTrend) {
     const t = agentTrend[u];
     t.deltaPct = t.prevStake > 0 ? ((t.latestStake - t.prevStake) / t.prevStake) * 100 : (t.latestStake > 0 ? null : 0);
   }
-  return { hasEnoughData, agentTrend };
+  for (const s in stateTrend) {
+    const t = stateTrend[s];
+    t.deltaPct = t.prevStake > 0 ? ((t.latestStake - t.prevStake) / t.prevStake) * 100 : (t.latestStake > 0 ? null : 0);
+  }
+  return { hasEnoughData, agentTrend, stateTrend };
 }
 
 /* ============================================================ per-batch time series (for trend charts) */
@@ -466,6 +528,6 @@ function toCSV(rows, columns) {
 }
 
 export {
-  PARSERS, detectFileType, aggregateBatches, computeCommission, computeTrends, computeBatchSeries,
+  PARSERS, detectFileType, detectPeriod, aggregateBatches, computeCommission, computeTrends, computeBatchSeries,
   decodeAgent, money, toCSV, EXCLUDED_BLOCKS, STRUCTURALLY_TRUSTED, DEFAULT_BLOCK_RULES,
 };

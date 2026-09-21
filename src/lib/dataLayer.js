@@ -95,7 +95,10 @@ async function insertChunked(table, rows) {
 export async function saveBatch(batch, userId) {
   const { data: batchRow, error } = await supabase
     .from("batches")
-    .insert({ type: batch.type, filename: batch.filename, uploaded_by: userId })
+    .insert({
+      type: batch.type, filename: batch.filename, uploaded_by: userId,
+      period_start: batch.periodStart || null, period_end: batch.periodEnd || null,
+    })
     .select()
     .single();
   if (error) throw error;
@@ -104,7 +107,7 @@ export async function saveBatch(batch, userId) {
   if (batch.supplemental.length > 0) {
     await insertChunked("supplemental_payments", batch.supplemental.map(s => suppToDb(s, batchRow.id)));
   }
-  return { ...batch, id: batchRow.id, uploadedAt: batchRow.uploaded_at };
+  return { ...batch, id: batchRow.id, uploadedAt: batchRow.uploaded_at, periodStart: batchRow.period_start, periodEnd: batchRow.period_end };
 }
 
 export async function loadAllBatches() {
@@ -126,6 +129,10 @@ export async function loadAllBatches() {
 
   return batchRows.map(b => ({
     id: b.id, type: b.type, filename: b.filename, uploadedAt: b.uploaded_at,
+    // Old batches from before this feature have no period saved -- fall back to
+    // the upload date so sorting/filtering still works, just less precisely.
+    periodStart: b.period_start || b.uploaded_at?.slice(0, 10) || null,
+    periodEnd: b.period_end || b.uploaded_at?.slice(0, 10) || null,
     items: itemsByBatch[b.id] || [], supplemental: suppByBatch[b.id] || [],
   }));
 }

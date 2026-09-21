@@ -45,8 +45,11 @@ create table batches (
   type text not null check (type in ('GB', 'EB', 'EB_MB', 'SP', 'SP_MB')),
   filename text not null,
   uploaded_by uuid references profiles(id),
-  uploaded_at timestamptz default now()
+  uploaded_at timestamptz default now(),
+  period_start date,
+  period_end date
 );
+create index batches_period_idx on batches(period_start);
 
 -- ---------------------------------------------------------------------------
 -- Line items: the cleaned per-agent-per-block rows from each batch.

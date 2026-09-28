@@ -11,6 +11,7 @@ import {
 
 import {
   PARSERS, detectFileType, detectPeriod, aggregateBatches, computeTrends, computeBatchSeries, toCSV,
+  decodeAgent, productOf,
 } from "./lib/engine-core";
 import { parseCSV } from "./lib/csvparse";
 import { can } from "./lib/permissions";
@@ -25,21 +26,23 @@ import LoginScreen from "./LoginScreen";
 
 /* ============================================================ design tokens */
 const C = {
-  // Content area: warm parchment, like a ledger's pages.
-  paper: "#EDE7DA", panel: "#FBF9F4", ink: "#211E17", sub: "#6B6355", line: "#DCD3C0",
+  // Content area: warm ivory ledger pages.
+  paper: "#F3EEE1", panel: "#FBF9F4", ink: "#1C1A15", sub: "#6B6355", line: "#DED5BE",
   // Semantic states -- kept under the old names (emerald/amber/brick) to avoid
-  // touching every call site, but re-tuned to the ledger palette: muted book-green
-  // for confirmed/positive, ochre for tentative, rust for mismatch/danger.
-  emerald: "#3D6B4C", emeraldSoft: "#E3EAE1", amber: "#B8862E", amberSoft: "#F5EBD8",
+  // touching every call site: muted forest-green for confirmed/positive, ochre
+  // for tentative, rust for mismatch/danger.
+  emerald: "#2F5B3F", emeraldSoft: "#E4EDE3", amber: "#B07A2E", amberSoft: "#F6EBD7",
   brick: "#9C3B2C", brickSoft: "#F3E2DC",
-  // "navy" is now the deep ledger-green used for primary buttons/CTAs -- name kept for the same reason.
-  navy: "#24352A",
-  // New: the navigation rail reads as the book's cloth cover -- darker and separate
-  // from the parchment content area, with the rust stamp-red as the one bold accent.
-  railBg: "#1D2B22", railActiveBg: "#31473A", railText: "#C9C0A9", railTextActive: "#F5F1E6",
-  stamp: "#A34A28", stampSoft: "#3A2A22",
+  // "navy" is the near-black ledger-ink used for primary buttons/CTAs -- name
+  // kept for the same reason as the others.
+  navy: "#1C1A15",
+  // The navigation rail reads as the book's cloth cover -- darker and separate
+  // from the ivory content area, with the rust stamp as the one bold accent.
+  railBg: "#1B2A20", railActiveBg: "#2C4534", railText: "#C9C2A8", railTextActive: "#F5F1E4",
+  stamp: "#A3441F", stampSoft: "#3A2A22",
 };
 const serif = { fontFamily: "'Fraunces', Georgia, serif" };
+const sans = { fontFamily: "'IBM Plex Sans', -apple-system, sans-serif" };
 const mono = { fontFamily: "'IBM Plex Mono', 'SF Mono', Consolas, monospace" };
 const nums = { fontVariantNumeric: "tabular-nums" };
 
@@ -90,6 +93,41 @@ function batchesInRange(batches, start, end) {
   });
 }
 
+/* ============================================================ report slicers
+   Power-BI-style slicers for the Reports workspace ONLY -- filtered at the
+   line-item level (not by re-slicing already-summed agent totals, which would
+   be wrong for an agent active on more than one product) so per-product/state
+   figures stay exactly as accurate as the unfiltered numbers. Clean Export,
+   History, and everything else that touches what actually gets paid always
+   uses the full, unsliced batches -- slicers never reach that path. */
+function filterBatchesForSlicers(batches, { products, states, channels } = {}) {
+  const noFilter = (!products || products.size === 0) && (!states || states.size === 0) && (!channels || channels.size === 0);
+  if (noFilter) return batches;
+  return batches.map(b => {
+    const items = b.items.filter(item => {
+      if (products && products.size > 0 && !products.has(productOf(item.sourceBlock))) return false;
+      const meta = decodeAgent(item.agentUsername);
+      if (states && states.size > 0 && !states.has(meta.stateName)) return false;
+      if (channels && channels.size > 0 && !channels.has(meta.channel)) return false;
+      return true;
+    });
+    // Supplemental payments (bonus/palliative/gift/monthly bonus) aren't tagged
+    // with a product block, so product-slicing can't isolate them precisely --
+    // keep them only when at least one item from this batch survived the
+    // product filter. State/channel filtering IS precise for these, since they
+    // carry their own agentUsername.
+    const productPass = !products || products.size === 0 || items.length > 0;
+    const supplemental = b.supplemental.filter(s => {
+      if (!productPass) return false;
+      const meta = decodeAgent(s.agentUsername);
+      if (states && states.size > 0 && !states.has(meta.stateName)) return false;
+      if (channels && channels.size > 0 && !channels.has(meta.channel)) return false;
+      return true;
+    });
+    return { ...b, items, supplemental };
+  });
+}
+
 // Triggers an actual browser download. toCSV() (from the shared engine) builds
 // the CSV text; everything below is DOM-specific and belongs in the app, not
 // in the engine module that also has to run outside a browser.
@@ -105,11 +143,7 @@ function downloadCSV(filename, rows, columns) {
 /* ============================================================ UI shell */
 const ALL_NAV = [
   { id: "upload", label: "Upload & Process", icon: Upload, action: "upload", section: "Work" },
-  { id: "overview", label: "Overview", icon: LayoutGrid, action: "view_reports", section: "Reporting" },
-  { id: "agents", label: "Agent Breakdown", icon: Users, action: "view_reports", section: "Reporting" },
-  { id: "products", label: "Products", icon: Package, action: "view_reports", section: "Reporting" },
-  { id: "states", label: "States", icon: MapPin, action: "view_reports", section: "Reporting" },
-  { id: "trends", label: "Trends", icon: TrendingUp, action: "view_reports", section: "Reporting" },
+  { id: "reports", label: "Reports", icon: LayoutGrid, action: "view_reports", section: "Reporting" },
   { id: "lowactivity", label: "Needs Attention", icon: AlertTriangle, action: "manage_followups", section: "Operations" },
   { id: "followups", label: "Follow-ups", icon: ClipboardList, action: "manage_followups", section: "Operations" },
   { id: "export", label: "Clean Export", icon: Download, action: "export", section: "Operations" },
@@ -125,7 +159,7 @@ export default function App() {
   const [profile, setProfile] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
 
-  const [tab, setTab] = useState("overview");
+  const [tab, setTab] = useState("reports");
   const [batches, setBatches] = useState([]);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
@@ -236,7 +270,7 @@ export default function App() {
     setPendingFiles([]);
     setPreviewData(null);
     setProcessing(false);
-    setTab("overview");
+    setTab("reports");
     refreshActivity();
   }
 
@@ -302,8 +336,8 @@ export default function App() {
   const series = computeBatchSeries(batches);
 
   return (
-    <div style={{ background: C.paper, color: C.ink, minHeight: "100vh", display: "flex", fontFamily: "'Inter', sans-serif" }}>
-      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" />
+    <div style={{ background: C.paper, color: C.ink, minHeight: "100vh", display: "flex", ...sans }}>
+      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" />
       <div style={{ width: 220, background: C.railBg, padding: "22px 12px", display: "flex", flexDirection: "column", flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "2px 10px 22px" }}>
           <RobusticMark />
@@ -367,14 +401,13 @@ export default function App() {
                 parseAllPending={parseAllPending} confirmSave={confirmSave} cancelPreview={cancelPreview}
                 previewData={previewData} setPreviewData={setPreviewData} processing={processing} fileInputRef={fileInputRef} hasHistory={batches.length > 0} />
             )}
-            {tab !== "upload" && tab !== "history" && tab !== "formulas" && tab !== "trends" && tab !== "followups" && tab !== "users" && tab !== "rules" && tab !== "activity" && batches.length > 0 && (
+            {(tab === "lowactivity" || tab === "export") && batches.length > 0 && (
               <ReportFilters batches={batches} selectedKeys={selectedKeys} setSelectedKeys={setSelectedKeys} />
             )}
-            {tab === "overview" && <OverviewTab agg={agg} trends={trends} series={series} hasData={batches.length > 0} />}
-            {tab === "agents" && <AgentsTab agg={agg} trends={trends} />}
-            {tab === "products" && <ProductsTab agg={agg} />}
-            {tab === "states" && <StatesTab agg={agg} trends={trends} />}
-            {tab === "trends" && <TrendsTab series={series} />}
+            {tab === "reports" && (
+              <ReportsTab batches={batches} selectedKeys={selectedKeys} setSelectedKeys={setSelectedKeys}
+                rules={rules} adjustments={adjustments} trends={trends} series={series} />
+            )}
             {tab === "lowactivity" && can(profile.role, "manage_followups") && (
               <LowActivityTab agg={agg} trends={trends} onCall={setCallAgent} />
             )}
@@ -415,7 +448,7 @@ function RobusticMark() {
 
 function FullScreenMessage({ children }) {
   return (
-    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: C.sub, fontFamily: "'Inter', sans-serif" }}>
+    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: C.sub, ...sans }}>
       {children}
     </div>
   );
@@ -627,7 +660,7 @@ function UploadTab({ pendingFiles, setPendingFiles, handleFiles, parseAllPending
   );
 }
 
-/* ============================================================ Overview */
+/* ============================================================ Reporting helpers (shared by Overview) */
 const CHANNEL_LABELS = { branch: "Branch", online: "Online", company_shop: "Company Shop", unknown: "Unassigned / House" };
 function channelBreakdown(agents) {
   const byChannel = new Map();
@@ -642,6 +675,96 @@ function channelBreakdown(agents) {
 const CHANNEL_COLORS = { branch: C.emerald, online: C.amber, company_shop: C.navy, unknown: C.sub };
 const TREND_LINE_COLORS = [C.emerald, C.amber, C.brick, C.navy, C.sub];
 
+/* ============================================================ Reports (consolidated: Overview/Agents/Products/States/Trends) */
+function SlicerGroup({ label, options, selected, onToggle, labels }) {
+  if (!options || options.length === 0) return null;
+  return (
+    <div>
+      <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".05em", color: C.sub, textTransform: "uppercase", marginBottom: 6 }}>{label}</div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", maxWidth: 340 }}>
+        {options.map(opt => {
+          const on = selected.has(opt);
+          return (
+            <button key={opt} onClick={() => onToggle(opt)} style={{
+              padding: "4px 10px", border: `1px solid ${on ? C.emerald : C.line}`, background: on ? C.emeraldSoft : "transparent",
+              color: on ? C.emerald : C.sub, fontSize: 11.5, cursor: "pointer",
+            }}>{(labels && labels[opt]) || opt}</button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+const REPORT_VIEWS = [
+  ["overview", "Overview"], ["agents", "Agents"], ["products", "Products"], ["states", "States"], ["trends", "Trends"],
+];
+
+function ReportsTab({ batches, selectedKeys, setSelectedKeys, rules, adjustments, trends, series }) {
+  const [view, setView] = useState("overview");
+  const [slicerProducts, setSlicerProducts] = useState(new Set());
+  const [slicerStates, setSlicerStates] = useState(new Set());
+  const [slicerChannels, setSlicerChannels] = useState(new Set());
+
+  if (batches.length === 0) return <EmptyState />;
+
+  const selectedBatches = batches.filter(b => selectedKeys.has(b.id));
+  // Unsliced, date-filtered only -- drives the slicer option lists themselves,
+  // so choosing a product doesn't make the other slicer's own options vanish.
+  const dateOnlyAgg = aggregateBatches(selectedBatches, rules, adjustments);
+  const slicedBatches = filterBatchesForSlicers(selectedBatches, { products: slicerProducts, states: slicerStates, channels: slicerChannels });
+  const agg = aggregateBatches(slicedBatches, rules, adjustments);
+
+  const toggleSetValue = (setter) => (value) => setter(prev => {
+    const next = new Set(prev);
+    next.has(value) ? next.delete(value) : next.add(value);
+    return next;
+  });
+  const activeSlicerCount = slicerProducts.size + slicerStates.size + slicerChannels.size;
+
+  return (
+    <>
+      <div style={{ marginBottom: 16 }}>
+        <h1 style={{ ...serif, fontSize: 30, fontWeight: 500, margin: "0 0 10px" }}>Reports</h1>
+        <div style={{ display: "flex", gap: 6 }}>
+          {REPORT_VIEWS.map(([id, label]) => (
+            <button key={id} onClick={() => setView(id)} style={{
+              padding: "7px 16px", border: `1px solid ${view === id ? C.ink : C.line}`,
+              background: view === id ? C.ink : C.panel, color: view === id ? "#fff" : C.sub,
+              fontSize: 12.5, fontWeight: 600, cursor: "pointer",
+            }}>{label}</button>
+          ))}
+        </div>
+      </div>
+
+      <ReportFilters batches={batches} selectedKeys={selectedKeys} setSelectedKeys={setSelectedKeys} />
+
+      <Panel>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: activeSlicerCount ? 12 : 0 }}>
+          <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
+            <SlicerGroup label="Product" options={dateOnlyAgg.products.map(p => p.name)} selected={slicerProducts} onToggle={toggleSetValue(setSlicerProducts)} />
+            <SlicerGroup label="State" options={dateOnlyAgg.states.map(s => s.state)} selected={slicerStates} onToggle={toggleSetValue(setSlicerStates)} />
+            <SlicerGroup label="Channel" options={Object.keys(CHANNEL_LABELS)} labels={CHANNEL_LABELS} selected={slicerChannels} onToggle={toggleSetValue(setSlicerChannels)} />
+          </div>
+          {activeSlicerCount > 0 && (
+            <button onClick={() => { setSlicerProducts(new Set()); setSlicerStates(new Set()); setSlicerChannels(new Set()); }}
+              style={{ border: "none", background: "none", color: C.sub, fontSize: 11.5, cursor: "pointer", textDecoration: "underline", whiteSpace: "nowrap" }}>
+              Clear filters ({activeSlicerCount})
+            </button>
+          )}
+        </div>
+      </Panel>
+
+      {view === "overview" && <OverviewTab agg={agg} trends={trends} series={series} hasData={true} />}
+      {view === "agents" && <AgentsTab agg={agg} trends={trends} />}
+      {view === "products" && <ProductsTab agg={agg} />}
+      {view === "states" && <StatesTab agg={agg} trends={trends} />}
+      {view === "trends" && <TrendsTab series={series} />}
+    </>
+  );
+}
+
+/* ============================================================ Overview */
 function OverviewTab({ agg, trends, series, hasData }) {
   if (!hasData) return <EmptyState />;
   const lossProducts = agg.products.filter(p => p.profit < 0);

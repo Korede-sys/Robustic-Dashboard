@@ -456,6 +456,16 @@ function computeCommission(item, blockRules = DEFAULT_BLOCK_RULES) {
 function adjustmentKey(batchId, agentUsername, sourceBlock) {
   return `${batchId}::${String(agentUsername).toLowerCase()}::${sourceBlock}`;
 }
+function productOf(block) {
+  if (block.startsWith("GB:")) return "Globalbet Virtual";
+  if (block === "EB:LUCKYBALL") return "Luckyball";
+  if (block === "EB:LUCKYGREECK") return "Luckygreek";
+  if (block === "EB:ROCKET_MAN") return "Rocket Man";
+  if (block === "EB_MB:BASE") return "Luckyball (Monthly)";
+  if (block.startsWith("SP_MB:")) return "Sports (Monthly)";
+  if (block.startsWith("SP:")) return "Sports";
+  return "Other";
+}
 function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES, adjustments = []) {
   const agentMap = new Map();
   const productAgg = new Map();
@@ -466,16 +476,7 @@ function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES, adjustments
   for (const adj of adjustments) adjustmentMap.set(adjustmentKey(adj.batchId, adj.agentUsername, adj.sourceBlock), adj);
   let verifiedCount = 0, unverifiedCount = 0, mismatchCount = 0, overrideCount = 0, adjustedCount = 0;
 
-  const PRODUCT_OF = (block) => {
-    if (block.startsWith("GB:")) return "Globalbet Virtual";
-    if (block === "EB:LUCKYBALL") return "Luckyball";
-    if (block === "EB:LUCKYGREECK") return "Luckygreek";
-    if (block === "EB:ROCKET_MAN") return "Rocket Man";
-    if (block === "EB_MB:BASE") return "Luckyball (Monthly)";
-    if (block.startsWith("SP_MB:")) return "Sports (Monthly)";
-    if (block.startsWith("SP:")) return "Sports";
-    return "Other";
-  };
+  const PRODUCT_OF = productOf;
 
   for (const batch of batches) {
     for (const item of batch.items) {
@@ -681,5 +682,5 @@ function toCSV(rows, columns) {
 
 export {
   PARSERS, detectFileType, detectPeriod, aggregateBatches, computeCommission, computeTrends, computeBatchSeries,
-  decodeAgent, money, toCSV, EXCLUDED_BLOCKS, STRUCTURALLY_TRUSTED, DEFAULT_BLOCK_RULES, adjustmentKey,
+  decodeAgent, money, toCSV, EXCLUDED_BLOCKS, STRUCTURALLY_TRUSTED, DEFAULT_BLOCK_RULES, adjustmentKey, productOf,
 };

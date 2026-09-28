@@ -3,11 +3,12 @@ import { Loader2 } from "lucide-react";
 import { signIn } from "./lib/dataLayer";
 
 const C = {
-  paper: "#EDE7DA", panel: "#FBF9F4", ink: "#211E17", sub: "#6B6355", line: "#DCD3C0",
-  emerald: "#3D6B4C", brick: "#9C3B2C", navy: "#24352A",
-  railBg: "#1D2B22", railText: "#C9C0A9", railTextActive: "#F5F1E6", stamp: "#A34A28",
+  paper: "#F3EEE1", panel: "#FBF9F4", ink: "#1C1A15", sub: "#6B6355", line: "#DED5BE",
+  emerald: "#2F5B3F", brick: "#9C3B2C", navy: "#1C1A15",
+  railBg: "#1B2A20", railText: "#C9C2A8", railTextActive: "#F5F1E4", stamp: "#A3441F",
 };
 const serif = { fontFamily: "'Fraunces', Georgia, serif" };
+const sans = { fontFamily: "'IBM Plex Sans', -apple-system, sans-serif" };
 
 function RobusticMark({ size = 40 }) {
   return (
@@ -42,9 +43,9 @@ export default function LoginScreen({ onSignedIn }) {
   return (
     <div style={{
       minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
-      background: C.railBg, fontFamily: "'Inter', sans-serif",
+      background: C.railBg, ...sans,
     }}>
-      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" />
+      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" />
 
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 28, position: "absolute", top: 40 }}>
         <RobusticMark />

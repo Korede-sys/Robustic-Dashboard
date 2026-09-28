@@ -33,8 +33,23 @@ const BRANCH_OVERRIDE = { jo: "Jos" };
 
 function money(v) {
   if (v === null || v === undefined) return null;
-  const s = String(v).trim().replace(/,/g, "");
+  let s = String(v).trim();
   if (s === "" || s === "-") return null;
+  const hasComma = s.includes(","), hasDot = s.includes(".");
+  if (hasComma && hasDot) {
+    // Both separators present: whichever comes LAST is the real decimal point,
+    // the other is a thousands separator and gets dropped. Handles US-style
+    // "1,234.56" and European-style "51.513,55" (and multi-group thousands
+    // like "78.016.891,00") the same way.
+    if (s.lastIndexOf(",") > s.lastIndexOf(".")) s = s.replace(/\./g, "").replace(",", ".");
+    else s = s.replace(/,/g, "");
+  } else if (hasComma) {
+    // Comma only: a single comma followed by exactly two digits at the end is
+    // a European decimal ("0,46" -> 0.46); anything else (or multiple commas)
+    // is a thousands separator and gets stripped ("12,340" -> 12340).
+    const isDecimal = /^-?\d+,\d{2}$/.test(s) && (s.match(/,/g) || []).length === 1;
+    s = isDecimal ? s.replace(",", ".") : s.replace(/,/g, "");
+  }
   const n = parseFloat(s);
   return isNaN(n) ? null : n;
 }
@@ -49,6 +64,23 @@ function decodeAgent(username) {
       stateName: STATE_MAP[stateCode] || "Unknown",
       branchCode: BRANCH_OVERRIDE[stateCode] || branchCode,
       channel: "branch",
+    };
+  }
+  // Company shops: same "code-state-branch-suffix" shape as a regular agent,
+  // but a 3-digit shop code instead of a 4-digit MMYY onboarding date (e.g.
+  // "001be-zak-wukari1" -- confirmed against real data: these are company-
+  // owned shops, commission-payable like any branch agent, just with no
+  // onboarding-month encoded in the code). Checked after the 4-digit pattern
+  // so a genuine MMYY agent is never misread as a 3-digit shop.
+  const s = /^(\d{3})([a-zA-Z]{2})-([a-zA-Z0-9]{2,6})-(.+)$/.exec(username);
+  if (s) {
+    const [, , stateCodeRaw, branchCode] = s;
+    const stateCode = stateCodeRaw.toLowerCase();
+    return {
+      username, onboardedMonth: null, stateCode,
+      stateName: STATE_MAP[stateCode] || "Unknown",
+      branchCode: BRANCH_OVERRIDE[stateCode] || branchCode,
+      channel: "company_shop",
     };
   }
   if (username.toLowerCase().startsWith("elb-")) {
@@ -127,6 +159,96 @@ function get(row, i) {
 }
 
 function parseGB(rows) {
+  if (isFinancialOverviewFormat(rows)) return parseGBFinancialOverview(rows);
+  return parseGBLegacyTiered(rows);
+}
+
+/* --- New format: "Financial Overview - All players" ------------------------
+   Semicolon-delimited, European number formatting (handled by money()), and
+   structured as a reseller -> agent -> cashier TREE via indentation, not a
+   flat per-agent list. Each entity gets two consecutive rows: one labelled
+   "Total in EUR" (carries the username + ticket count), immediately followed
+   by one labelled "NGN" (carries the real local-currency amounts we report
+   on). Only the middle tree level -- usernames matching the same
+   MMYY-state-branch-suffix pattern decodeAgent already expects (confirmed
+   against a real row: "0619ab-abn-ugocalis") -- counts as an agent. Reseller
+   rows above it (e.g. "AccessBET") and cashier rows below it (e.g.
+   "ugocalis-cashier1") are real rows in the sheet but are not commission-
+   bearing agents, so they're skipped rather than double-counting the same
+   money at multiple tree levels. */
+function isFinancialOverviewFormat(rows) {
+  const first = rows && rows[0] ? String(rows[0][0] || rows[0].join(" ")) : "";
+  return first.toLowerCase().includes("financial overview");
+}
+const AGENT_USERNAME_RE = /^(?:\d{2}\d{2}[a-zA-Z]{2}-[a-zA-Z0-9]{2,6}-.+|\d{3}[a-zA-Z]{2}-[a-zA-Z0-9]{2,6}-.+)$/;
+function stripTreePrefix(raw) {
+  return String(raw || "").replace(/^[\s|\\_]+/, "").trim();
+}
+function isOnlineUsername(u) { return String(u || "").toLowerCase().startsWith("elb-"); }
+const CASHIER_SUFFIX_RE = /-cashier\d+$/i;
+
+function parseGBFinancialOverview(rows) {
+  // Walks the tree in file order, keeping "the most recently seen agent" as
+  // context: an agent row opens a new context and starts its own totals; any
+  // row that follows and does NOT itself match the agent pattern (a cashier
+  // sub-account, e.g. "ugocalis-cashier1" under "...-ugocalis") is rolled
+  // into that open context rather than kept separate -- confirmed business
+  // rule: a cashier is the same agent's operation split across terminals,
+  // not an independently payable entity. elb- prefixed rows are online-
+  // channel agents, paid through a separate process -- excluded here
+  // entirely, and do NOT close/replace the current branch-agent context (a
+  // cashier row immediately after an online row still belongs to whichever
+  // branch agent opened the context). The very first entity in the file is
+  // the reseller-level rollup (e.g. "AccessBET") -- not a payable agent,
+  // and explicitly does not open a context, so nothing gets wrongly
+  // attributed to it if the tree ever returns to another top-level branch.
+  const byAgent = new Map();
+  let currentAgentKey = null;
+  let sawRoot = false;
+
+  const addTo = (item, tickets, stake, payout, profit, commission) => {
+    item.tickets += tickets || 0; item.stake += stake || 0; item.payout += payout || 0;
+    item.profit += profit || 0; item.commissionAmount += commission || 0;
+  };
+
+  for (let i = 2; i < rows.length; i++) {
+    const row = rows[i];
+    const currency = String(get(row, 4)).trim();
+    if (!currency.toLowerCase().startsWith("total in")) continue;
+    const nextRow = rows[i + 1];
+    if (!nextRow || String(get(nextRow, 4)).trim() !== "NGN") continue;
+    const rawUsername = stripTreePrefix(get(row, 0));
+    i++; // consumed the NGN row either way
+
+    if (!sawRoot) { sawRoot = true; continue; }
+    if (isOnlineUsername(rawUsername)) continue; // separate payment process, not this run
+
+    const tickets = money(get(row, 3)), stake = money(get(nextRow, 5)), payout = money(get(nextRow, 6));
+    const profit = money(get(nextRow, 17)), commission = money(get(nextRow, 15));
+
+    if (AGENT_USERNAME_RE.test(rawUsername)) {
+      const key = rawUsername.toLowerCase();
+      currentAgentKey = key;
+      if (!byAgent.has(key)) {
+        byAgent.set(key, {
+          agentUsername: rawUsername, sourceBlock: "GB:FIN_OVERVIEW",
+          tickets: 0, stake: 0, payout: 0, profit: 0, commissionAmount: 0,
+          commissionType: null, balance: null, isHouse: isHouseAgent(rawUsername),
+          totalEarnings: null, avgStake: null,
+        });
+      }
+      addTo(byAgent.get(key), tickets, stake, payout, profit, commission);
+    } else if (currentAgentKey && CASHIER_SUFFIX_RE.test(rawUsername)) {
+      addTo(byAgent.get(currentAgentKey), tickets, stake, payout, profit, commission);
+    }
+    // else: a row that's neither a recognized agent nor a "-cashierN" sub-account
+    // of one (e.g. an unrecognized username prefix) -- left out rather than
+    // guessed into someone else's total. See the parsing notes for known cases.
+  }
+  return { items: Array.from(byAgent.values()), supplemental: [] };
+}
+
+function parseGBLegacyTiered(rows) {
   const items = [], supplemental = [];
   // Block A is the true, complete per-agent total for stake/payout/profit. Its own
   // commission column always carries a genuine 10% uplift for agents also on the
@@ -290,7 +412,7 @@ const DEFAULT_BLOCK_RULES = {
 const STRUCTURALLY_TRUSTED = new Set([
   "EB:LUCKYBALL", "EB:LUCKYGREECK", "EB:ROCKET_MAN", "EB_MB:BASE",
   "SP:35PCT", "SP:UP30PCT", "SP:3RD_PARTY", "SP:POOL",
-  "GB:BLOCK_A",
+  "GB:BLOCK_A", "GB:FIN_OVERVIEW",
   "SP_MB:BASE",
 ]);
 const EXCLUDED_BLOCKS = new Set([
@@ -331,12 +453,18 @@ function computeCommission(item, blockRules = DEFAULT_BLOCK_RULES) {
 }
 
 /* ============================================================ aggregation */
-function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES) {
+function adjustmentKey(batchId, agentUsername, sourceBlock) {
+  return `${batchId}::${String(agentUsername).toLowerCase()}::${sourceBlock}`;
+}
+function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES, adjustments = []) {
   const agentMap = new Map();
   const productAgg = new Map();
   const stateAgg = new Map();
   const mismatches = [];
-  let verifiedCount = 0, unverifiedCount = 0, mismatchCount = 0, overrideCount = 0;
+  const appliedAdjustments = [];
+  const adjustmentMap = new Map();
+  for (const adj of adjustments) adjustmentMap.set(adjustmentKey(adj.batchId, adj.agentUsername, adj.sourceBlock), adj);
+  let verifiedCount = 0, unverifiedCount = 0, mismatchCount = 0, overrideCount = 0, adjustedCount = 0;
 
   const PRODUCT_OF = (block) => {
     if (block.startsWith("GB:")) return "Globalbet Virtual";
@@ -353,25 +481,48 @@ function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES) {
     for (const item of batch.items) {
       if (EXCLUDED_BLOCKS.has(item.sourceBlock) || !STRUCTURALLY_TRUSTED.has(item.sourceBlock)) continue;
       if (item.isHouse) continue;
-      const { calc, confidence, verified, diff, diffPct, isOverride } = computeCommission(item, blockRules);
-      // The payable commission is the sheet's own value UNLESS a rule's override
-      // is explicitly turned on for this block/type -- in which case the
-      // calculated value replaces it. This is the one place "source is always
-      // authoritative" can be deliberately overridden, and only because someone
-      // flipped a switch, never silently.
-      const payableCommission = isOverride ? calc : (item.commissionAmount || 0);
-      if (isOverride) overrideCount++;
+      const meta = decodeAgent(item.agentUsername);
+      let calc, confidence, verified, diff, diffPct, isOverride;
+      if (meta.channel === "online") {
+        // Business rule, confirmed directly, not something a rate formula can express:
+        // online-channel (elb-) agents are never paid commission on this product,
+        // regardless of their stake or profit. So there's nothing to cross-check
+        // against a formula here -- the sheet's ₦0 is correct, not a mismatch, and
+        // flagging it as one was a false positive the formula had no way to know
+        // to avoid. (Separate from *how* online agents get paid elsewhere -- see
+        // Globalbet, where they're excluded from this pipeline entirely because
+        // they're paid through a different process.)
+        calc = item.commissionAmount;
+        confidence = "not applicable — online agents aren't paid commission on this product";
+        verified = null; diff = undefined; diffPct = undefined; isOverride = false;
+      } else {
+        ({ calc, confidence, verified, diff, diffPct, isOverride } = computeCommission(item, blockRules));
+      }
+      // The payable commission, in priority order: a manual adjustment (someone
+      // looked at exactly this line and corrected it, with a reason on record)
+      // beats a rule override (a whole product/type recalculated), which beats
+      // the sheet's own value. Each is a deliberate, visible escalation -- never
+      // a silent one.
+      const adjustment = adjustmentMap.get(adjustmentKey(batch.id, item.agentUsername, item.sourceBlock));
+      const payableCommission = adjustment ? adjustment.adjustedCommission : (isOverride ? calc : (item.commissionAmount || 0));
+      if (adjustment) {
+        adjustedCount++;
+        appliedAdjustments.push({
+          id: adjustment.id, agent: item.agentUsername, block: item.sourceBlock, batch: batch.filename, batchId: batch.id,
+          original: adjustment.originalCommission, adjusted: adjustment.adjustedCommission,
+          reason: adjustment.reason, createdBy: adjustment.createdBy, createdAt: adjustment.createdAt,
+        });
+      } else if (isOverride) overrideCount++;
       else if (verified === true) verifiedCount++;
-      else if (verified === false) { mismatchCount++; mismatches.push({ agent: item.agentUsername, block: item.sourceBlock, type: item.commissionType, source: item.commissionAmount, calculated: calc, diff, diffPct, batch: batch.filename }); }
+      else if (verified === false) { mismatchCount++; mismatches.push({ agent: item.agentUsername, block: item.sourceBlock, type: item.commissionType, source: item.commissionAmount, calculated: calc, diff, diffPct, batch: batch.filename, batchId: batch.id }); }
       else unverifiedCount++;
 
       const key = item.agentUsername.toLowerCase();
-      const meta = decodeAgent(item.agentUsername);
       if (!agentMap.has(key)) {
         agentMap.set(key, {
           username: item.agentUsername, state: meta.stateName, channel: meta.channel,
           tickets: 0, stake: 0, payout: 0, profit: 0, sourceCommission: 0, calcCommission: 0,
-          monthlyBonus: 0, bonus: 0, palliative: 0, gift: 0, products: new Set(), allVerified: true, hasOverride: false,
+          monthlyBonus: 0, bonus: 0, palliative: 0, gift: 0, products: new Set(), allVerified: true, hasOverride: false, hasAdjustment: false,
           totalEarnings: null, balance: null, avgStake: null,
         });
       }
@@ -379,8 +530,9 @@ function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES) {
       a.tickets += item.tickets || 0; a.stake += item.stake || 0; a.payout += item.payout || 0;
       a.profit += item.profit || 0; a.sourceCommission += payableCommission;
       a.calcCommission += calc || 0;
-      if (verified === false && !isOverride) a.allVerified = false;
+      if (verified === false && !isOverride && !adjustment) a.allVerified = false;
       if (isOverride) a.hasOverride = true;
+      if (adjustment) a.hasAdjustment = true;
       // GB-specific extras, carried straight from the sheet -- only Globalbet items
       // set these, so they stay null for every other product.
       if (item.totalEarnings !== undefined && item.totalEarnings !== null) a.totalEarnings = item.totalEarnings;
@@ -422,8 +574,8 @@ function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES) {
     .sort((a, b) => b.stake - a.stake);
 
   return {
-    agents, products, states, mismatches,
-    stats: { verifiedCount, unverifiedCount, mismatchCount, overrideCount },
+    agents, products, states, mismatches, adjustments: appliedAdjustments,
+    stats: { verifiedCount, unverifiedCount, mismatchCount, overrideCount, adjustedCount },
     totals: {
       stake: agents.reduce((s, a) => s + a.stake, 0), payout: agents.reduce((s, a) => s + a.payout, 0),
       profit: agents.reduce((s, a) => s + a.profit, 0), commission: agents.reduce((s, a) => s + a.sourceCommission, 0),
@@ -529,5 +681,5 @@ function toCSV(rows, columns) {
 
 export {
   PARSERS, detectFileType, detectPeriod, aggregateBatches, computeCommission, computeTrends, computeBatchSeries,
-  decodeAgent, money, toCSV, EXCLUDED_BLOCKS, STRUCTURALLY_TRUSTED, DEFAULT_BLOCK_RULES,
+  decodeAgent, money, toCSV, EXCLUDED_BLOCKS, STRUCTURALLY_TRUSTED, DEFAULT_BLOCK_RULES, adjustmentKey,
 };

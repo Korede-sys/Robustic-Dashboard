@@ -191,6 +191,43 @@ export async function addCommissionRule(rule, userId) {
   if (error) throw error;
 }
 
+/* ============================================================ manual adjustments */
+function adjustmentFromDb(row, nameById) {
+  return {
+    id: row.id, batchId: row.batch_id, agentUsername: row.agent_username, sourceBlock: row.source_block,
+    originalCommission: row.original_commission === null ? null : Number(row.original_commission),
+    adjustedCommission: Number(row.adjusted_commission), reason: row.reason,
+    createdBy: (nameById && nameById[row.created_by]) || "—", createdAt: row.created_at,
+  };
+}
+export async function loadAllAdjustments() {
+  const [{ data: rows, error }, profiles] = await Promise.all([
+    supabase.from("manual_adjustments").select("*").order("created_at", { ascending: false }),
+    getAllProfiles(),
+  ]);
+  if (error) throw error;
+  const nameById = {};
+  for (const p of profiles) nameById[p.id] = p.name;
+  return rows.map(r => adjustmentFromDb(r, nameById));
+}
+export async function addManualAdjustment(adj, userId) {
+  // Upsert on the (batch, agent, block) unique index -- re-adjusting the same
+  // line updates the existing correction rather than stacking an ambiguous
+  // second one on top of it. Username is lowercased before writing, matching
+  // how it's already used as the lookup key everywhere else in the engine.
+  const { error } = await supabase.from("manual_adjustments")
+    .upsert({
+      batch_id: adj.batchId, agent_username: adj.agentUsername.toLowerCase(), source_block: adj.sourceBlock,
+      original_commission: adj.originalCommission, adjusted_commission: adj.adjustedCommission,
+      reason: adj.reason, created_by: userId, created_at: new Date().toISOString(),
+    }, { onConflict: "batch_id,agent_username,source_block" });
+  if (error) throw error;
+}
+export async function deleteManualAdjustment(id) {
+  const { error } = await supabase.from("manual_adjustments").delete().eq("id", id);
+  if (error) throw error;
+}
+
 /* ============================================================ activity log */
 export async function logActivity(action, details, userId) {
   // Best-effort -- a logging failure should never block the actual action it's describing.

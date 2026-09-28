@@ -3,8 +3,8 @@
 // boundary -- the database enforces the real rule via RLS regardless of what
 // the UI shows, so a mismatch here is a UX bug, not a security hole.
 const PERMISSIONS = {
-  admin:   ["view_reports", "upload", "delete_upload", "export", "manage_followups", "manage_users", "manage_rules"],
-  finance: ["view_reports", "upload", "delete_upload", "export", "manage_followups"],
+  admin:   ["view_reports", "upload", "delete_upload", "export", "manage_followups", "manage_users", "manage_rules", "manage_adjustments"],
+  finance: ["view_reports", "upload", "delete_upload", "export", "manage_followups", "manage_adjustments"],
   manager: ["view_reports", "manage_followups"],
   viewer:  ["view_reports"],
 };

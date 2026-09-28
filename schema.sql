@@ -125,7 +125,9 @@ create table commission_rules (
 );
 insert into commission_rules (source_block, label, basis, rate, confidence) values
   ('SP:35PCT', 'Sports — 35% tier', 'profit', 0.35, 'confirmed'),
-  ('SP:POOL', 'Sports — POOL tier', 'profit', 0.15, 'tentative (only 3 samples)');
+  ('SP:POOL', 'Sports — POOL tier', 'profit', 0.15, 'tentative (only 3 samples)'),
+  ('EB:LUCKYGREECK', 'Luckygreek — sales', 'stake', 0.07,
+   'confirmed (corrected Sep 2026 -- sheet''s own "(5%)" label was stale, real rate is 7%)');
 
 -- ---------------------------------------------------------------------------
 -- Activity log: who did what, written by the app at the moment each action happens.

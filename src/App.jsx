@@ -19,6 +19,7 @@ import {
   saveBatch, loadAllBatches, deleteBatch,
   loadAllInterventions, saveIntervention, updateInterventionStatus, deleteIntervention,
   loadCommissionRules, updateCommissionRule, addCommissionRule, logActivity, loadActivityLog,
+  loadAllAdjustments, addManualAdjustment, deleteManualAdjustment,
 } from "./lib/dataLayer";
 import LoginScreen from "./LoginScreen";
 
@@ -59,6 +60,35 @@ const FILE_TYPE_LABELS = {
   GB: "Globalbet Virtual (weekly)", EB: "Luckyball & Luckygreek (weekly)",
   EB_MB: "Luckyball Monthly Bonus", SP: "Sports (weekly)", SP_MB: "Sport Monthly Bonus",
 };
+
+/* ============================================================ date-range filtering
+   Batches carry periodStart/periodEnd (confirmed by the uploader at save time --
+   see UploadTab). A batch is "in range" if its period overlaps the selected
+   range at all, not just if it's fully contained -- a weekly file spanning a
+   month boundary shouldn't vanish from either month's view. Batches with no
+   period recorded (older data, or a period that was never confirmed) are left
+   out of date-based selection entirely, since there's nothing to compare. */
+function todayISO() { return toISODateLocal(new Date()); }
+function toISODateLocal(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; }
+function addDaysISO(iso, n) { const d = new Date(iso + "T00:00:00"); d.setDate(d.getDate() + n); return toISODateLocal(d); }
+function startOfMonthISO(iso) { const d = new Date(iso + "T00:00:00"); return toISODateLocal(new Date(d.getFullYear(), d.getMonth(), 1)); }
+function startOfWeekISO(iso) { const d = new Date(iso + "T00:00:00"); const dow = d.getDay(); const diff = dow === 0 ? 6 : dow - 1; return addDaysISO(iso, -diff); } // week starts Monday
+
+const DATE_PRESETS = [
+  { id: "all", label: "All time", range: () => null },
+  { id: "week", label: "This week", range: () => { const t = todayISO(); return { start: startOfWeekISO(t), end: t }; } },
+  { id: "month", label: "This month", range: () => { const t = todayISO(); return { start: startOfMonthISO(t), end: t }; } },
+  { id: "4weeks", label: "Last 4 weeks", range: () => { const t = todayISO(); return { start: addDaysISO(t, -28), end: t }; } },
+  { id: "custom", label: "Custom", range: null },
+];
+
+function batchesInRange(batches, start, end) {
+  // Overlap test: batch.periodStart <= end AND batch.periodEnd >= start.
+  return batches.filter(b => {
+    if (!b.periodStart || !b.periodEnd) return false;
+    return b.periodStart <= end && b.periodEnd >= start;
+  });
+}
 
 // Triggers an actual browser download. toCSV() (from the shared engine) builds
 // the CSV text; everything below is DOM-specific and belongs in the app, not
@@ -106,6 +136,7 @@ export default function App() {
   const [rules, setRules] = useState({});
   const [ruleRows, setRuleRows] = useState([]);
   const [activityLog, setActivityLog] = useState([]);
+  const [adjustments, setAdjustments] = useState([]);
   const fileInputRef = useRef(null);
 
   // ---- auth: check session on load, react to sign-in/out ----
@@ -129,15 +160,17 @@ export default function App() {
     if (!session) return;
     (async () => {
       setLoading(true);
-      const [loadedBatches, loadedInterventions, ruleData, loadedActivity] = await Promise.all([
+      const [loadedBatches, loadedInterventions, ruleData, loadedActivity, loadedAdjustments] = await Promise.all([
         loadAllBatches(),
         can(profile?.role, "manage_followups") ? loadAllInterventions() : Promise.resolve([]),
-        // These two tables are new (added by schema_v2_rules_and_activity.sql). If that
-        // migration hasn't been run yet, fail gracefully to defaults instead of taking
-        // the whole app down -- everything else still works, just without live rules
-        // (falls back to the engine's built-in defaults) or an activity history yet.
+        // These tables are added by later migrations. If a migration hasn't been
+        // run yet, fail gracefully to defaults instead of taking the whole app
+        // down -- everything else still works, just without live rules (falls
+        // back to the engine's built-in defaults), an activity history, or
+        // manual adjustments yet.
         loadCommissionRules().catch(() => ({ rules: {}, rows: [] })),
         loadActivityLog().catch(() => []),
+        loadAllAdjustments().catch(() => []),
       ]);
       setBatches(loadedBatches);
       setSelectedKeys(new Set(loadedBatches.map(b => b.id)));
@@ -145,12 +178,16 @@ export default function App() {
       setRules(ruleData.rules);
       setRuleRows(ruleData.rows);
       setActivityLog(loadedActivity);
+      setAdjustments(loadedAdjustments);
       setLoading(false);
     })();
   }, [session, profile?.role]);
 
   async function refreshActivity() {
     try { setActivityLog(await loadActivityLog()); } catch (e) { /* non-critical */ }
+  }
+  async function refreshAdjustments() {
+    try { setAdjustments(await loadAllAdjustments()); } catch (e) { /* non-critical */ }
   }
 
   const [previewData, setPreviewData] = useState(null); // { parsedBatches, agg } once parsed, before saving
@@ -260,7 +297,7 @@ export default function App() {
     group.items.push(item);
   }
   const selectedBatches = batches.filter(b => selectedKeys.has(b.id));
-  const agg = aggregateBatches(selectedBatches, rules);
+  const agg = aggregateBatches(selectedBatches, rules, adjustments);
   const trends = computeTrends(batches);
   const series = computeBatchSeries(batches);
 
@@ -331,9 +368,9 @@ export default function App() {
                 previewData={previewData} setPreviewData={setPreviewData} processing={processing} fileInputRef={fileInputRef} hasHistory={batches.length > 0} />
             )}
             {tab !== "upload" && tab !== "history" && tab !== "formulas" && tab !== "trends" && tab !== "followups" && tab !== "users" && tab !== "rules" && tab !== "activity" && batches.length > 0 && (
-              <PeriodSelector batches={batches} selectedKeys={selectedKeys} setSelectedKeys={setSelectedKeys} />
+              <ReportFilters batches={batches} selectedKeys={selectedKeys} setSelectedKeys={setSelectedKeys} />
             )}
-            {tab === "overview" && <OverviewTab agg={agg} trends={trends} hasData={batches.length > 0} />}
+            {tab === "overview" && <OverviewTab agg={agg} trends={trends} series={series} hasData={batches.length > 0} />}
             {tab === "agents" && <AgentsTab agg={agg} trends={trends} />}
             {tab === "products" && <ProductsTab agg={agg} />}
             {tab === "states" && <StatesTab agg={agg} trends={trends} />}
@@ -344,7 +381,10 @@ export default function App() {
             {tab === "followups" && can(profile.role, "manage_followups") && (
               <FollowUpsTab interventions={interventions} updateStatus={handleUpdateInterventionStatus} removeIntervention={removeInterventionRecord} />
             )}
-            {tab === "export" && can(profile.role, "export") && <ExportTab agg={agg} />}
+            {tab === "export" && can(profile.role, "export") && (
+              <ExportTab agg={agg} canAdjust={can(profile.role, "manage_adjustments")} userId={session.user.id}
+                refreshAdjustments={refreshAdjustments} logActivityFn={logActivity} />
+            )}
             {tab === "history" && <HistoryTab batches={batches} removeBatch={can(profile.role, "delete_upload") ? removeBatch : null} />}
             {tab === "rules" && can(profile.role, "manage_rules") && (
               <RulesTab ruleRows={ruleRows} setRuleRows={setRuleRows} setRules={setRules} userId={session.user.id} logActivityFn={logActivity} refreshActivity={refreshActivity} batches={batches} />
@@ -380,25 +420,80 @@ function FullScreenMessage({ children }) {
     </div>
   );
 }
-function PeriodSelector({ batches, selectedKeys, setSelectedKeys }) {
-  const toggle = (b) => {
+function ReportFilters({ batches, selectedKeys, setSelectedKeys }) {
+  const [preset, setPreset] = useState("all");
+  const [customStart, setCustomStart] = useState("");
+  const [customEnd, setCustomEnd] = useState("");
+  const [showFiles, setShowFiles] = useState(false);
+
+  const datedCount = batches.filter(b => b.periodStart && b.periodEnd).length;
+
+  function applyPreset(id) {
+    setPreset(id);
+    if (id === "custom") return; // wait for both custom dates to be filled
+    if (id === "all") { setSelectedKeys(new Set(batches.map(b => b.id))); return; }
+    const def = DATE_PRESETS.find(p => p.id === id);
+    const range = def.range();
+    const matched = batchesInRange(batches, range.start, range.end);
+    setSelectedKeys(new Set(matched.map(b => b.id)));
+  }
+
+  function applyCustom(start, end) {
+    setCustomStart(start); setCustomEnd(end);
+    if (start && end) setSelectedKeys(new Set(batchesInRange(batches, start, end).map(b => b.id)));
+  }
+
+  const toggleFile = (b) => {
     setSelectedKeys(prev => {
       const next = new Set(prev);
       next.has(b.id) ? next.delete(b.id) : next.add(b.id);
       return next;
     });
   };
+
   return (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 20 }}>
-      {batches.map(b => {
-        const on = selectedKeys.has(b.id);
-        return (
-          <button key={b.id} onClick={() => toggle(b)} style={{
-            border: `1px solid ${on ? C.emerald : C.line}`, background: on ? C.emeraldSoft : "transparent",
-            color: on ? C.emerald : C.sub, padding: "5px 11px", fontSize: 11.5, cursor: "pointer",
-          }}>{on ? <CheckCircle2 size={11} style={{ verticalAlign: -1, marginRight: 4 }} /> : null}{b.filename}</button>
-        );
-      })}
+    <div style={{ marginBottom: 20 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        {DATE_PRESETS.map(p => (
+          <button key={p.id} onClick={() => applyPreset(p.id)} style={{
+            border: `1px solid ${preset === p.id ? C.emerald : C.line}`,
+            background: preset === p.id ? C.emeraldSoft : "transparent",
+            color: preset === p.id ? C.emerald : C.sub, padding: "6px 13px", fontSize: 12, fontWeight: 500, cursor: "pointer",
+          }}>{p.label}</button>
+        ))}
+        {preset === "custom" && (
+          <span style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 4 }}>
+            <input type="date" value={customStart} onChange={(e) => applyCustom(e.target.value, customEnd)}
+              style={{ border: `1px solid ${C.line}`, padding: "5px 8px", fontSize: 12 }} />
+            <span style={{ color: C.sub, fontSize: 12 }}>to</span>
+            <input type="date" value={customEnd} onChange={(e) => applyCustom(customStart, e.target.value)}
+              style={{ border: `1px solid ${C.line}`, padding: "5px 8px", fontSize: 12 }} />
+          </span>
+        )}
+        <span style={{ flex: 1 }} />
+        <span style={{ fontSize: 11.5, color: C.sub }}>{selectedKeys.size} of {batches.length} file(s) included</span>
+        <button onClick={() => setShowFiles(v => !v)} style={{ border: "none", background: "none", color: C.sub, fontSize: 11.5, cursor: "pointer", textDecoration: "underline" }}>
+          {showFiles ? "Hide" : "Select files individually"}
+        </button>
+      </div>
+      {datedCount < batches.length && (
+        <div style={{ fontSize: 11.5, color: C.amber, marginTop: 6 }}>
+          {batches.length - datedCount} file(s) have no confirmed reporting period, so date filters skip them — use "Select files individually" to include them.
+        </div>
+      )}
+      {showFiles && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10, paddingTop: 10, borderTop: `1px solid ${C.line}` }}>
+          {batches.map(b => {
+            const on = selectedKeys.has(b.id);
+            return (
+              <button key={b.id} onClick={() => toggleFile(b)} style={{
+                border: `1px solid ${on ? C.emerald : C.line}`, background: on ? C.emeraldSoft : "transparent",
+                color: on ? C.emerald : C.sub, padding: "5px 11px", fontSize: 11.5, cursor: "pointer",
+              }}>{on ? <CheckCircle2 size={11} style={{ verticalAlign: -1, marginRight: 4 }} /> : null}{b.filename}</button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -533,10 +628,27 @@ function UploadTab({ pendingFiles, setPendingFiles, handleFiles, parseAllPending
 }
 
 /* ============================================================ Overview */
-function OverviewTab({ agg, trends, hasData }) {
+const CHANNEL_LABELS = { branch: "Branch", online: "Online", company_shop: "Company Shop", unknown: "Unassigned / House" };
+function channelBreakdown(agents) {
+  const byChannel = new Map();
+  for (const a of agents) {
+    const ch = a.channel || "unknown";
+    if (!byChannel.has(ch)) byChannel.set(ch, { channel: ch, agents: 0, stake: 0, commission: 0 });
+    const c = byChannel.get(ch);
+    c.agents += 1; c.stake += a.stake || 0; c.commission += a.sourceCommission || 0;
+  }
+  return Array.from(byChannel.values()).sort((a, b) => b.stake - a.stake);
+}
+const CHANNEL_COLORS = { branch: C.emerald, online: C.amber, company_shop: C.navy, unknown: C.sub };
+const TREND_LINE_COLORS = [C.emerald, C.amber, C.brick, C.navy, C.sub];
+
+function OverviewTab({ agg, trends, series, hasData }) {
   if (!hasData) return <EmptyState />;
   const lossProducts = agg.products.filter(p => p.profit < 0);
   const topState = agg.states[0], topProduct = agg.products[0];
+  const channels = channelBreakdown(agg.agents);
+  const zeroCommissionOnline = agg.agents.filter(a => a.channel === "online" && (a.sourceCommission || 0) === 0).length;
+  const trendTypes = series ? Object.keys(series).filter(t => series[t].length > 1) : [];
   return (
     <>
       <h1 style={{ ...serif, fontSize: 28, fontWeight: 500, margin: "0 0 20px" }}>Overview</h1>
@@ -571,7 +683,32 @@ function OverviewTab({ agg, trends, hasData }) {
         </ResponsiveContainer>
       </Panel>
 
-      <div style={{ display: "flex", gap: 20 }}>
+      <div style={{ display: "flex", gap: 20, marginBottom: 20 }}>
+        <Panel title="By channel" style={{ flex: 1 }}>
+          <ResponsiveContainer width="100%" height={160}>
+            <PieChart>
+              <Pie data={channels} dataKey="stake" nameKey="channel" innerRadius={38} outerRadius={62} paddingAngle={2}>
+                {channels.map((c) => <Cell key={c.channel} fill={CHANNEL_COLORS[c.channel] || C.sub} />)}
+              </Pie>
+              <Tooltip formatter={(v) => naira(v)} contentStyle={{ fontSize: 12, border: `1px solid ${C.line}` }} />
+            </PieChart>
+          </ResponsiveContainer>
+          {channels.map(c => (
+            <div key={c.channel} style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", fontSize: 12.5, borderBottom: `1px solid ${C.line}` }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ width: 8, height: 8, borderRadius: "50%", background: CHANNEL_COLORS[c.channel] || C.sub, display: "inline-block" }} />
+                {CHANNEL_LABELS[c.channel] || c.channel} <span style={{ color: C.sub }}>({c.agents})</span>
+              </span>
+              <span style={{ ...nums, fontWeight: 600 }}>{nairaShort(c.stake)}</span>
+            </div>
+          ))}
+          {zeroCommissionOnline > 0 && (
+            <div style={{ fontSize: 11.5, color: C.brick, marginTop: 8, display: "flex", gap: 6 }}>
+              <AlertTriangle size={12} style={{ flexShrink: 0, marginTop: 1 }} />
+              {zeroCommissionOnline} online agent(s) showing ₦0 commission this period — see Formulas tab for the known issue.
+            </div>
+          )}
+        </Panel>
         <Panel title="Top Agents" style={{ flex: 1 }}>
           {agg.agents.slice(0, 5).map(a => (
             <div key={a.username} style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", fontSize: 13, borderBottom: `1px solid ${C.line}` }}>
@@ -594,6 +731,23 @@ function OverviewTab({ agg, trends, hasData }) {
           ))}
         </Panel>
       </div>
+
+      {trendTypes.length > 0 && (
+        <Panel title="Stake over time" right={<span style={{ fontSize: 11.5, color: C.sub }}>by product, across all uploaded periods</span>}>
+          <ResponsiveContainer width="100%" height={220}>
+            <LineChart margin={{ left: 4 }}>
+              <CartesianGrid stroke={C.line} vertical={false} />
+              <XAxis dataKey="date" type="category" allowDuplicatedCategory={false} tick={{ fontSize: 11, fill: C.sub }} axisLine={{ stroke: C.line }} tickLine={false} />
+              <YAxis tick={{ fontSize: 11, fill: C.sub }} axisLine={false} tickLine={false} tickFormatter={nairaShort} />
+              <Tooltip formatter={(v) => naira(v)} contentStyle={{ fontSize: 12, border: `1px solid ${C.line}` }} />
+              {trendTypes.map((type, i) => (
+                <Line key={type} data={series[type]} dataKey="stake" name={PRODUCT_LABELS[type] || type}
+                  type="monotone" stroke={TREND_LINE_COLORS[i % TREND_LINE_COLORS.length]} strokeWidth={2} dot={{ r: 3 }} />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
+        </Panel>
+      )}
     </>
   );
 }
@@ -1023,7 +1177,92 @@ function FollowUpsTab({ interventions, updateStatus, removeIntervention }) {
 }
 
 /* ============================================================ Clean Export */
-function ExportTab({ agg }) {
+function AdjustmentModal({ mismatch, onClose, onSave }) {
+  const [amount, setAmount] = useState(String(mismatch.calculated ?? ""));
+  const [reason, setReason] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function handleSave() {
+    setError(null);
+    const value = parseFloat(amount);
+    if (isNaN(value) || value < 0) { setError("Enter a valid amount."); return; }
+    if (!reason.trim()) { setError("A reason is required — this becomes part of the audit trail."); return; }
+    setSaving(true);
+    try {
+      await onSave({ adjustedCommission: value, reason: reason.trim() });
+      onClose();
+    } catch (e) {
+      setError(e.message || "Couldn't save this adjustment.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(20,23,31,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10 }}>
+      <div style={{ background: C.panel, width: 460, border: `1px solid ${C.line}`, maxHeight: "90vh", overflowY: "auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 18px", borderBottom: `1px solid ${C.line}` }}>
+          <div style={{ fontWeight: 600, fontSize: 14 }}>Adjust — {mismatch.agent}</div>
+          <button onClick={onClose} style={{ border: "none", background: "none", cursor: "pointer" }}><X size={16} /></button>
+        </div>
+        <div style={{ padding: 18 }}>
+          <div style={{ fontSize: 12.5, color: C.sub, marginBottom: 14, lineHeight: 1.5 }}>
+            {mismatch.block} ({mismatch.type || "no type"}) — sheet shows <strong>{naira(mismatch.source)}</strong>,
+            formula suggests <strong>{naira(mismatch.calculated)}</strong>. This corrects only this one agent, this one
+            line, for this one period — it doesn't change the rule or anyone else's numbers.
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 11.5, color: C.sub, marginBottom: 4 }}>Corrected commission (₦)</div>
+            <input type="number" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)}
+              style={{ width: "100%", border: `1px solid ${C.line}`, padding: "7px 9px", fontSize: 13, boxSizing: "border-box", ...nums }} />
+          </div>
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 11.5, color: C.sub, marginBottom: 4 }}>Reason (required — kept for audit)</div>
+            <textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={3}
+              placeholder="e.g. Sheet showed ₦0 despite real stake — confirmed data error, correcting to 7% formula value"
+              style={{ width: "100%", border: `1px solid ${C.line}`, padding: "7px 9px", fontSize: 13, boxSizing: "border-box", fontFamily: "inherit", resize: "vertical" }} />
+          </div>
+          {error && <div style={{ fontSize: 12, color: C.brick, marginBottom: 12 }}>{error}</div>}
+          <button onClick={handleSave} disabled={saving} style={{
+            width: "100%", background: C.navy, color: "#fff", border: "none", padding: "10px 0", fontSize: 13,
+            fontWeight: 600, cursor: saving ? "default" : "pointer", display: "flex", alignItems: "center",
+            justifyContent: "center", gap: 6, opacity: saving ? 0.7 : 1,
+          }}>
+            {saving ? <Loader2 size={14} /> : <>Save adjustment <CheckCircle2 size={14} /></>}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ExportTab({ agg, canAdjust, userId, refreshAdjustments, logActivityFn }) {
+  const [adjusting, setAdjusting] = useState(null); // the mismatch being adjusted, or null
+  const [removingId, setRemovingId] = useState(null);
+
+  async function handleSaveAdjustment({ adjustedCommission, reason }) {
+    await addManualAdjustment({
+      batchId: adjusting.batchId, agentUsername: adjusting.agent, sourceBlock: adjusting.block,
+      originalCommission: adjusting.source, adjustedCommission, reason,
+    }, userId);
+    await logActivityFn("manual_adjustment",
+      `Adjusted ${adjusting.agent} (${adjusting.block}) from ${naira(adjusting.source)} to ${naira(adjustedCommission)} — ${reason}`,
+      userId);
+    await refreshAdjustments();
+  }
+  async function handleRemoveAdjustment(adj) {
+    if (!adj.id) return;
+    setRemovingId(adj.id);
+    try {
+      await deleteManualAdjustment(adj.id);
+      await logActivityFn("manual_adjustment", `Removed adjustment for ${adj.agent} (${adj.block}) — reverted to sheet value`, userId);
+      await refreshAdjustments();
+    } finally {
+      setRemovingId(null);
+    }
+  }
+
   if (agg.agents.length === 0) return <EmptyState />;
   return (
     <>
@@ -1047,6 +1286,7 @@ function ExportTab({ agg }) {
               an error correction.
               {" "}{agg.stats.verifiedCount} matched the formula cleanly, {agg.stats.unverifiedCount} have no
               independently-derived formula to check against (source value used, as always).
+              {agg.stats.adjustedCount > 0 && <> {agg.stats.adjustedCount} were manually corrected — see below.</>}
             </div>
           </div>
         </Panel>
@@ -1064,6 +1304,7 @@ function ExportTab({ agg }) {
           { label: "Monthly Bonus", get: a => a.monthlyBonus.toFixed(2) },
           { label: "Total", get: a => (a.sourceCommission + a.monthlyBonus).toFixed(2) },
           { label: "Formula Verified", get: a => a.allVerified ? "Yes" : "Check mismatch" },
+          { label: "Manually Adjusted", get: a => a.hasAdjustment ? "Yes" : "" },
           { label: "Bonus", get: a => a.bonus ? a.bonus.toFixed(2) : "" },
           { label: "Palliative", get: a => a.palliative ? a.palliative.toFixed(2) : "" },
           { label: "Gift", get: a => a.gift ? a.gift.toFixed(2) : "" },
@@ -1093,7 +1334,10 @@ function ExportTab({ agg }) {
                   <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}` }}>{naira(a.sourceCommission)}</td>
                   <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}` }}>{a.monthlyBonus ? naira(a.monthlyBonus) : "—"}</td>
                   <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}`, fontWeight: 600 }}>{naira(a.sourceCommission + a.monthlyBonus)}</td>
-                  <td style={{ padding: "8px", borderBottom: `1px solid ${C.line}` }}>{!a.allVerified && <ShieldAlert size={14} color={C.brick} />}</td>
+                  <td style={{ padding: "8px", borderBottom: `1px solid ${C.line}`, display: "flex", gap: 4 }}>
+                    {!a.allVerified && <ShieldAlert size={14} color={C.brick} />}
+                    {a.hasAdjustment && <span title="Manually adjusted" style={{ fontSize: 10, color: C.navy, border: `1px solid ${C.navy}`, borderRadius: 3, padding: "1px 4px" }}>ADJ</span>}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -1101,14 +1345,51 @@ function ExportTab({ agg }) {
         </div>
       </Panel>
 
-      {agg.mismatches.length > 0 && (
-        <Panel title="Formula mismatches">
-          {agg.mismatches.map((m, i) => (
-            <div key={i} style={{ fontSize: 12.5, padding: "7px 0", borderBottom: `1px solid ${C.line}`, color: C.sub }}>
-              <strong style={{ color: C.ink }}>{m.agent}</strong> — {m.block} ({m.type || "no type"}): source {naira(m.source)} vs calculated {naira(m.calculated)} ({m.diffPct !== null ? `${m.diffPct.toFixed(1)}%` : ""})
+      {agg.adjustments.length > 0 && (
+        <Panel title="Manual adjustments applied">
+          {agg.adjustments.map((adj, i) => (
+            <div key={i} style={{ fontSize: 12.5, padding: "9px 0", borderBottom: `1px solid ${C.line}` }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
+                <div>
+                  <strong style={{ color: C.ink }}>{adj.agent}</strong>
+                  <span style={{ color: C.sub }}> — {adj.block}: {naira(adj.original)} → <strong>{naira(adj.adjusted)}</strong></span>
+                  <div style={{ color: C.sub, marginTop: 2 }}>{adj.reason}</div>
+                  <div style={{ color: C.sub, fontSize: 11, marginTop: 2 }}>
+                    {adj.createdBy}{adj.createdAt ? ` · ${new Date(adj.createdAt).toLocaleDateString()}` : ""}
+                  </div>
+                </div>
+                {canAdjust && adj.id && (
+                  <button onClick={() => handleRemoveAdjustment(adj)} disabled={removingId === adj.id}
+                    style={{ border: "none", background: "none", color: C.sub, cursor: "pointer", flexShrink: 0 }}>
+                    {removingId === adj.id ? <Loader2 size={13} /> : <Trash2 size={13} />}
+                  </button>
+                )}
+              </div>
             </div>
           ))}
         </Panel>
+      )}
+
+      {agg.mismatches.length > 0 && (
+        <Panel title="Formula mismatches">
+          {agg.mismatches.map((m, i) => (
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, fontSize: 12.5, padding: "7px 0", borderBottom: `1px solid ${C.line}`, color: C.sub }}>
+              <div>
+                <strong style={{ color: C.ink }}>{m.agent}</strong> — {m.block} ({m.type || "no type"}): source {naira(m.source)} vs calculated {naira(m.calculated)} ({m.diffPct !== null ? `${m.diffPct.toFixed(1)}%` : ""})
+              </div>
+              {canAdjust && (
+                <button onClick={() => setAdjusting(m)} style={{
+                  border: `1px solid ${C.line}`, background: "#fff", padding: "4px 10px", fontSize: 11.5,
+                  cursor: "pointer", flexShrink: 0,
+                }}>Adjust</button>
+              )}
+            </div>
+          ))}
+        </Panel>
+      )}
+
+      {adjusting && (
+        <AdjustmentModal mismatch={adjusting} onClose={() => setAdjusting(null)} onSave={handleSaveAdjustment} />
       )}
     </>
   );

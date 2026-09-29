@@ -605,9 +605,10 @@ function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES, adjustments
       const prod = PRODUCT_OF(item.sourceBlock);
       a.products.add(prod);
 
-      if (!productAgg.has(prod)) productAgg.set(prod, { name: prod, stake: 0, payout: 0, profit: 0, commission: 0 });
+      if (!productAgg.has(prod)) productAgg.set(prod, { name: prod, tickets: 0, stake: 0, payout: 0, profit: 0, commission: 0, agents: new Set() });
       const p = productAgg.get(prod);
-      p.stake += item.stake || 0; p.payout += item.payout || 0; p.profit += item.profit || 0; p.commission += payableCommission;
+      p.tickets += item.tickets || 0; p.stake += item.stake || 0; p.payout += item.payout || 0; p.profit += item.profit || 0; p.commission += payableCommission;
+      p.agents.add(key);
 
       const st = meta.stateName || "Unknown";
       if (!stateAgg.has(st)) stateAgg.set(st, { state: st, stake: 0, payout: 0, profit: 0, commission: 0, agents: new Set() });
@@ -630,10 +631,15 @@ function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES, adjustments
       // Every supplemental payment type counts toward monthlyBonus (the combined
       // total used everywhere else) -- but bonus/palliative/gift are also tracked
       // individually so each can be checked against the sheet on its own, not just
-      // as one blended number.
+      // as one blended number. Online agents are excluded here too, confirmed
+      // explicitly: the "no commission for online accounts" policy covers every
+      // payment type, not just the per-transaction commission -- so a bonus line
+      // for an elb- agent is real money in the sheet but zero here, same as
+      // their commission, not paid through this system at all.
       const key = supp.agentUsername.toLowerCase();
       if (!agentMap.has(key)) continue;
       const a = agentMap.get(key);
+      if (a.channel === "online") continue;
       const amt = supp.amount || 0;
       a.monthlyBonus += amt;
       if (supp.type === "bonus") a.bonus += amt;
@@ -644,7 +650,8 @@ function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES, adjustments
 
   const agents = Array.from(agentMap.values()).map(a => ({ ...a, products: Array.from(a.products) }))
     .sort((a, b) => b.stake - a.stake).map((a, i) => ({ ...a, rank: i + 1 }));
-  const products = Array.from(productAgg.values()).sort((a, b) => b.stake - a.stake);
+  const products = Array.from(productAgg.values()).map(p => ({ ...p, agentCount: p.agents.size }))
+    .sort((a, b) => b.stake - a.stake);
   const states = Array.from(stateAgg.values()).map(s => ({ ...s, agentCount: s.agents.size }))
     .sort((a, b) => b.stake - a.stake);
 

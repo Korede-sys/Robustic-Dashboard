@@ -6,7 +6,7 @@ import {
   Upload, Download, CheckCircle2, AlertTriangle, ShieldCheck, ShieldAlert,
   FileSpreadsheet, History as HistoryIcon, BookOpen, X, Loader2, Trash2, LayoutGrid,
   Users, Package, MapPin, Search, ArrowUp, ArrowDown, Minus, Phone, ClipboardList, TrendingUp, Check, LogOut, UserCog,
-  Sliders, Activity as ActivityIcon, Eye,
+  Sliders, Activity as ActivityIcon, Eye, ChevronDown,
 } from "lucide-react";
 
 import {
@@ -160,6 +160,13 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(true);
 
   const [tab, setTab] = useState("reports");
+  const [openNavGroup, setOpenNavGroup] = useState(null);
+  const navRef = useRef(null);
+  useEffect(() => {
+    function onClickOutside(e) { if (navRef.current && !navRef.current.contains(e.target)) setOpenNavGroup(null); }
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, []);
   const [batches, setBatches] = useState([]);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
@@ -347,33 +354,63 @@ export default function App() {
         input:focus, select:focus, textarea:focus { outline: 1px solid ${C.navy}; }
       `}</style>
 
-      <nav aria-label="Main" style={{
+      <nav ref={navRef} aria-label="Main" style={{
         height: 60, flexShrink: 0, background: C.railBg, borderBottom: `1px solid ${C.line}`,
-        display: "flex", alignItems: "center", padding: "0 22px", gap: 4, boxSizing: "border-box", overflowX: "auto",
+        display: "flex", alignItems: "center", padding: "0 22px", gap: 4, boxSizing: "border-box",
+        overflowX: "auto", position: "relative", zIndex: 20,
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 9, marginRight: 18, flexShrink: 0 }}>
           <RobusticMark />
           <span style={{ ...serif, fontSize: 16, color: C.railTextActive, letterSpacing: -0.2 }}>Robustic</span>
         </div>
-        {NAV_SECTIONS.map((group, gi) => (
-          <span key={group.section} style={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
-            {gi > 0 && <span style={{ width: 1, height: 20, background: C.line, margin: "0 8px" }} />}
-            {group.items.map((n) => {
-              const Icon = n.icon; const active = tab === n.id;
-              return (
-                <button key={n.id} onClick={() => setTab(n.id)} style={{
-                  display: "flex", alignItems: "center", gap: 7, padding: "8px 13px", whiteSpace: "nowrap",
-                  border: "none", background: active ? C.railActiveBg : "transparent",
-                  color: active ? C.railTextActive : C.railText, borderRadius: 8, cursor: "pointer",
-                  fontSize: 13, fontWeight: active ? 700 : 500,
+        {NAV_SECTIONS.map((group) => {
+          const groupActive = group.items.some(n => n.id === tab);
+          if (group.items.length === 1) {
+            // Solo item (Upload, Formulas) -- no dropdown needed, a plain button
+            // like xPool's own "Admin Panel" / "Content" single-click items.
+            const n = group.items[0]; const Icon = n.icon; const active = tab === n.id;
+            return (
+              <button key={n.id} onClick={() => setTab(n.id)} style={{
+                display: "flex", alignItems: "center", gap: 7, padding: "8px 13px", whiteSpace: "nowrap",
+                border: "none", background: active ? C.railActiveBg : "transparent",
+                color: active ? C.railTextActive : C.railText, borderRadius: 8, cursor: "pointer",
+                fontSize: 13, fontWeight: active ? 700 : 500, flexShrink: 0,
+              }}><Icon size={14} strokeWidth={2.2} />{n.label}</button>
+            );
+          }
+          const isOpen = openNavGroup === group.section;
+          return (
+            <div key={group.section} style={{ position: "relative", flexShrink: 0 }}>
+              <button onClick={() => setOpenNavGroup(isOpen ? null : group.section)} style={{
+                display: "flex", alignItems: "center", gap: 6, padding: "8px 13px", whiteSpace: "nowrap",
+                border: "none", background: (groupActive || isOpen) ? C.railActiveBg : "transparent",
+                color: (groupActive || isOpen) ? C.railTextActive : C.railText, borderRadius: 8, cursor: "pointer",
+                fontSize: 13, fontWeight: groupActive ? 700 : 500,
+              }}>
+                {group.section}
+                <ChevronDown size={13} style={{ transform: isOpen ? "rotate(180deg)" : "none", transition: "transform .12s" }} />
+              </button>
+              {isOpen && (
+                <div style={{
+                  position: "absolute", top: "calc(100% + 6px)", left: 0, minWidth: 190, background: C.panel,
+                  border: `1px solid ${C.line}`, borderRadius: 10, padding: 6, boxShadow: "0 16px 40px rgba(0,0,0,0.5)",
                 }}>
-                  <Icon size={14} strokeWidth={2.2} />
-                  {n.label}
-                </button>
-              );
-            })}
-          </span>
-        ))}
+                  {group.items.map((n) => {
+                    const Icon = n.icon; const active = tab === n.id;
+                    return (
+                      <button key={n.id} onClick={() => { setTab(n.id); setOpenNavGroup(null); }} style={{
+                        display: "flex", alignItems: "center", gap: 9, width: "100%", padding: "8px 10px",
+                        border: "none", background: active ? C.railActiveBg : "transparent",
+                        color: active ? C.ink : C.sub, borderRadius: 7, cursor: "pointer",
+                        fontSize: 13, fontWeight: active ? 600 : 500, textAlign: "left",
+                      }}><Icon size={14} strokeWidth={2.2} />{n.label}</button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
         <span style={{ flex: 1 }} />
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
           <div style={{ textAlign: "right" }}>
@@ -913,10 +950,29 @@ function AgentsTab({ agg, trends }) {
     <>
       <h1 style={{ ...serif, fontSize: 28, fontWeight: 500, margin: "0 0 20px" }}>Agent Breakdown</h1>
       <Panel title={`${agg.agents.length} agents with activity`} right={
-        <div style={{ display: "flex", alignItems: "center", gap: 6, border: `1px solid ${C.line}`, padding: "4px 8px" }}>
-          <Search size={13} color={C.sub} />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search agent or state"
-            style={{ border: "none", outline: "none", fontSize: 12.5, width: 160 }} />
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, border: `1px solid ${C.line}`, padding: "4px 8px" }}>
+            <Search size={13} color={C.sub} />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search agent or state"
+              style={{ border: "none", outline: "none", fontSize: 12.5, width: 160, background: "transparent" }} />
+          </div>
+          <button onClick={() => downloadCSV("robustic_agent_breakdown.csv", sorted, [
+            { label: "Rank", get: a => a.rank }, { label: "Agent", get: a => a.username }, { label: "State", get: a => a.state },
+            { label: "Channel", get: a => a.channel }, { label: "Products", get: a => a.products.join("; ") },
+            { label: "Tickets", get: a => Math.round(a.tickets) },
+            { label: "Stake", get: a => a.stake.toFixed(2) }, { label: "Avg Stake", get: a => a.avgStake !== null ? a.avgStake.toFixed(2) : "" },
+            { label: "Payout", get: a => a.payout.toFixed(2) }, { label: "Profit", get: a => a.profit.toFixed(2) },
+            { label: "Commission", get: a => a.sourceCommission.toFixed(2) },
+            { label: "Bonus", get: a => a.bonus ? a.bonus.toFixed(2) : "" }, { label: "Palliative", get: a => a.palliative ? a.palliative.toFixed(2) : "" },
+            { label: "Gift", get: a => a.gift ? a.gift.toFixed(2) : "" }, { label: "Monthly Bonus", get: a => a.monthlyBonus.toFixed(2) },
+            { label: "Total Earnings", get: a => a.totalEarnings !== null ? a.totalEarnings.toFixed(2) : "" },
+            { label: "Balance", get: a => a.balance !== null ? a.balance.toFixed(2) : "" },
+            { label: "Formula Verified", get: a => a.allVerified ? "Yes" : "Check mismatch" },
+            { label: "Manually Adjusted", get: a => a.hasAdjustment ? "Yes" : "" },
+          ])} style={{
+            display: "flex", alignItems: "center", gap: 6, border: "none", background: C.emerald, color: "#fff",
+            padding: "7px 13px", fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap",
+          }}><Download size={13} /> Export CSV</button>
         </div>
       }>
         <div style={{ fontSize: 11.5, color: C.sub, marginBottom: 10 }}>
@@ -974,6 +1030,7 @@ function AgentsTab({ agg, trends }) {
 /* ============================================================ Products */
 const PIE_COLORS = [C.emerald, C.amber, C.navy, C.sub, "#7A8B99"];
 function ProductsTab({ agg }) {
+  const { sorted, sortKey, sortDir, toggleSort } = useSort(agg.products, "stake", "desc");
   if (agg.products.length === 0) return <EmptyState />;
   return (
     <>
@@ -1005,6 +1062,45 @@ function ProductsTab({ agg }) {
           ))}
         </Panel>
       </div>
+
+      <Panel title="All products — full detail" right={
+        <button onClick={() => downloadCSV("robustic_product_breakdown.csv", sorted, [
+          { label: "Product", get: p => p.name }, { label: "Agents", get: p => p.agentCount },
+          { label: "Tickets", get: p => Math.round(p.tickets) }, { label: "Stake", get: p => p.stake.toFixed(2) },
+          { label: "Payout", get: p => p.payout.toFixed(2) }, { label: "Profit", get: p => p.profit.toFixed(2) },
+          { label: "Commission", get: p => p.commission.toFixed(2) },
+        ])} style={{
+          display: "flex", alignItems: "center", gap: 6, border: "none", background: C.emerald, color: "#fff",
+          padding: "7px 13px", fontSize: 12, fontWeight: 600, cursor: "pointer",
+        }}><Download size={13} /> Export CSV</button>
+      }>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <thead>
+            <tr style={{ textAlign: "left", color: C.sub, fontSize: 11.5 }}>
+              <SortableTh label="Product" field="name" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              <SortableTh label="Agents" field="agentCount" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              <SortableTh label="Tickets" field="tickets" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              <SortableTh label="Stake" field="stake" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              <SortableTh label="Payout" field="payout" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              <SortableTh label="Profit" field="profit" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              <SortableTh label="Commission" field="commission" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map(p => (
+              <tr key={p.name}>
+                <td style={{ padding: "8px", borderBottom: `1px solid ${C.line}`, fontWeight: 500 }}>{p.name}</td>
+                <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}` }}>{p.agentCount}</td>
+                <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}` }}>{Math.round(p.tickets).toLocaleString()}</td>
+                <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}` }}>{naira(p.stake)}</td>
+                <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}` }}>{naira(p.payout)}</td>
+                <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}`, color: p.profit < 0 ? C.brick : C.ink }}>{naira(p.profit)}</td>
+                <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}`, fontWeight: 600 }}>{naira(p.commission)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </Panel>
     </>
   );
 }
@@ -1017,7 +1113,17 @@ function StatesTab({ agg, trends }) {
   return (
     <>
       <h1 style={{ ...serif, fontSize: 28, fontWeight: 500, margin: "0 0 20px" }}>State Performance</h1>
-      <Panel title="All states — click a column to sort">
+      <Panel title="All states — click a column to sort" right={
+        <button onClick={() => downloadCSV("robustic_state_breakdown.csv", sorted, [
+          { label: "State", get: s => s.state }, { label: "Agents", get: s => s.agentCount },
+          { label: "Stake", get: s => s.stake.toFixed(2) }, { label: "Payout", get: s => s.payout.toFixed(2) },
+          { label: "Profit", get: s => s.profit.toFixed(2) }, { label: "Avg per Agent", get: s => s.avgPerAgent.toFixed(2) },
+          { label: "Commission", get: s => s.commission.toFixed(2) },
+        ])} style={{
+          display: "flex", alignItems: "center", gap: 6, border: "none", background: C.emerald, color: "#fff",
+          padding: "7px 13px", fontSize: 12, fontWeight: 600, cursor: "pointer",
+        }}><Download size={13} /> Export CSV</button>
+      }>
         <div style={{ maxHeight: 560, overflowY: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead style={{ position: "sticky", top: 0, background: C.panel }}>

@@ -26,23 +26,23 @@ import LoginScreen from "./LoginScreen";
 
 /* ============================================================ design tokens */
 const C = {
-  // Dark, near-black content area -- matches the xPool reference direction.
-  paper: "#0C0A14", panel: "#161320", ink: "#F1EEFA", sub: "#8B84A3", line: "#292340",
-  // Semantic states -- kept under the old names (emerald/amber/brick) to avoid
-  // touching every call site: green for confirmed/positive, amber for
-  // tentative, red for mismatch/danger -- all tuned for contrast on dark panels.
-  emerald: "#34D399", emeraldSoft: "rgba(52,211,153,0.14)", amber: "#F0B44F", amberSoft: "rgba(240,180,79,0.14)",
-  brick: "#F87171", brickSoft: "rgba(248,113,113,0.14)",
-  // "navy" is the primary-action color -- was ledger-ink, now the brand purple.
-  // Name kept so existing call sites (buttons, primary CTAs) don't all need editing.
-  navy: "#8B5CF6",
-  // Top nav bar, not a left rail -- slightly lighter than the page so it reads
-  // as a distinct surface, with purple as the one bold accent for active state.
-  railBg: "#17131F", railActiveBg: "rgba(255,255,255,0.12)", railText: "#EDE9FE", railTextActive: "#FFFFFF",
-  stamp: "#8B5CF6", stampSoft: "rgba(139,92,246,0.16)",
+  // Light, enterprise-SaaS content area -- off-white page, pure-white cards.
+  paper: "#F7F8FA", panel: "#FFFFFF", ink: "#0F1222", sub: "#6B7280", line: "#E6E8EE",
+  // Semantic states, tuned for a light surface: green for confirmed/positive,
+  // amber for tentative, red for mismatch/danger. Kept under the old names
+  // (emerald/amber/brick) so existing call sites don't all need editing.
+  emerald: "#067647", emeraldSoft: "#ECFDF3", amber: "#B54708", amberSoft: "#FFFAEB",
+  brick: "#DC2626", brickSoft: "#FEF2F2",
+  // "navy" is the primary-action/brand color -- indigo here, the one accent
+  // used sparingly for active states and primary buttons.
+  navy: "#4F46E5",
+  // Sidebar is a distinct white surface with a border, not a colored/dark
+  // rail -- active state reads via a soft indigo fill + indigo text.
+  railBg: "#FFFFFF", railActiveBg: "#EEF0FF", railText: "#4B5165", railTextActive: "#4F46E5",
+  stamp: "#4F46E5", stampSoft: "#EEF0FF",
 };
-const serif = { fontFamily: "'IBM Plex Sans', -apple-system, sans-serif", fontWeight: 700 };
-const sans = { fontFamily: "'IBM Plex Sans', -apple-system, sans-serif" };
+const serif = { fontFamily: "'Plus Jakarta Sans', -apple-system, sans-serif", fontWeight: 800 };
+const sans = { fontFamily: "'Plus Jakarta Sans', -apple-system, sans-serif" };
 const mono = { fontFamily: "'IBM Plex Mono', 'SF Mono', Consolas, monospace" };
 const nums = { fontVariantNumeric: "tabular-nums" };
 
@@ -343,93 +343,73 @@ export default function App() {
   const series = computeBatchSeries(batches);
 
   return (
-    <div style={{ background: C.paper, color: C.ink, minHeight: "100vh", display: "flex", flexDirection: "column", ...sans }}>
-      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" />
+    <div style={{ background: C.paper, color: C.ink, minHeight: "100vh", display: "flex", ...sans }}>
+      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500;600&display=swap" />
       <style>{`
         input, select, textarea {
           background: ${C.panel}; color: ${C.ink}; border-color: ${C.line};
-          color-scheme: dark;
         }
         input::placeholder, textarea::placeholder { color: ${C.sub}; }
-        input:focus, select:focus, textarea:focus { outline: 1px solid ${C.navy}; }
+        input:focus, select:focus, textarea:focus { outline: 2px solid ${C.navy}22; border-color: ${C.navy}; }
       `}</style>
 
-      <nav ref={navRef} aria-label="Main" style={{
-        height: 60, flexShrink: 0, background: C.railBg, borderBottom: `1px solid ${C.line}`,
-        display: "flex", alignItems: "center", padding: "0 22px", gap: 4, boxSizing: "border-box",
-        overflowX: "auto", position: "relative", zIndex: 20,
+      <nav aria-label="Main" style={{
+        width: 236, flexShrink: 0, background: C.railBg, borderRight: `1px solid ${C.line}`,
+        display: "flex", flexDirection: "column", padding: "20px 14px", boxSizing: "border-box", height: "100vh",
+        position: "sticky", top: 0, overflowY: "auto",
       }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 9, marginRight: 18, flexShrink: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "4px 10px 24px" }}>
           <RobusticMark />
-          <span style={{ ...serif, fontSize: 16, color: C.railTextActive, letterSpacing: -0.2 }}>Robustic</span>
+          <span style={{ ...serif, fontSize: 16, color: C.ink, letterSpacing: -0.3 }}>Robustic</span>
         </div>
-        {NAV_SECTIONS.map((group) => {
-          const groupActive = group.items.some(n => n.id === tab);
-          if (group.items.length === 1) {
-            // Solo item (Upload, Formulas) -- no dropdown needed, a plain button
-            // like xPool's own "Admin Panel" / "Content" single-click items.
-            const n = group.items[0]; const Icon = n.icon; const active = tab === n.id;
-            return (
-              <button key={n.id} onClick={() => setTab(n.id)} style={{
-                display: "flex", alignItems: "center", gap: 7, padding: "8px 13px", whiteSpace: "nowrap",
-                border: "none", background: active ? C.railActiveBg : "transparent",
-                color: active ? C.railTextActive : C.railText, borderRadius: 8, cursor: "pointer",
-                fontSize: 13, fontWeight: active ? 700 : 500, flexShrink: 0,
-              }}><Icon size={14} strokeWidth={2.2} />{n.label}</button>
-            );
-          }
-          const isOpen = openNavGroup === group.section;
-          return (
-            <div key={group.section} style={{ position: "relative", flexShrink: 0 }}>
-              <button onClick={() => setOpenNavGroup(isOpen ? null : group.section)} style={{
-                display: "flex", alignItems: "center", gap: 6, padding: "8px 13px", whiteSpace: "nowrap",
-                border: "none", background: (groupActive || isOpen) ? C.railActiveBg : "transparent",
-                color: (groupActive || isOpen) ? C.railTextActive : C.railText, borderRadius: 8, cursor: "pointer",
-                fontSize: 13, fontWeight: groupActive ? 700 : 500,
-              }}>
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 16 }}>
+          {NAV_SECTIONS.map((group) => (
+            <div key={group.section}>
+              <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 0.6, color: "#A2A6B5", padding: "0 10px 6px", textTransform: "uppercase" }}>
                 {group.section}
-                <ChevronDown size={13} style={{ transform: isOpen ? "rotate(180deg)" : "none", transition: "transform .12s" }} />
-              </button>
-              {isOpen && (
-                <div style={{
-                  position: "absolute", top: "calc(100% + 6px)", left: 0, minWidth: 190, background: C.panel,
-                  border: `1px solid ${C.line}`, borderRadius: 10, padding: 6, boxShadow: "0 16px 40px rgba(0,0,0,0.5)",
-                }}>
-                  {group.items.map((n) => {
-                    const Icon = n.icon; const active = tab === n.id;
-                    return (
-                      <button key={n.id} onClick={() => { setTab(n.id); setOpenNavGroup(null); }} style={{
-                        display: "flex", alignItems: "center", gap: 9, width: "100%", padding: "8px 10px",
-                        border: "none", background: active ? C.railActiveBg : "transparent",
-                        color: active ? C.ink : C.sub, borderRadius: 7, cursor: "pointer",
-                        fontSize: 13, fontWeight: active ? 600 : 500, textAlign: "left",
-                      }}><Icon size={14} strokeWidth={2.2} />{n.label}</button>
-                    );
-                  })}
-                </div>
-              )}
+              </div>
+              {group.items.map((n) => {
+                const Icon = n.icon; const active = tab === n.id;
+                return (
+                  <button key={n.id} onClick={() => setTab(n.id)} style={{
+                    display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "9px 12px",
+                    border: "none", background: active ? C.railActiveBg : "transparent",
+                    color: active ? C.railTextActive : C.railText, borderRadius: 8, cursor: "pointer",
+                    fontSize: 13.5, fontWeight: active ? 700 : 500, textAlign: "left", marginBottom: 2,
+                  }}><Icon size={15} strokeWidth={2.2} />{n.label}</button>
+                );
+              })}
             </div>
-          );
-        })}
-        <span style={{ flex: 1 }} />
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
-          <div style={{ textAlign: "right" }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: C.railTextActive }}>{profile.name}</div>
-            <div style={{ fontSize: 10, color: C.railText, textTransform: "capitalize" }}>{profile.role} · {batches.length} file{batches.length !== 1 ? "s" : ""}</div>
-          </div>
+          ))}
+        </div>
+        <div style={{ paddingTop: 12, borderTop: `1px solid ${C.line}`, display: "flex", alignItems: "center", gap: 9 }}>
           <div style={{
             width: 28, height: 28, borderRadius: 999, background: C.stamp, display: "flex",
-            alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, color: "#0C0A14", flexShrink: 0,
+            alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, color: "#fff", flexShrink: 0,
           }}>{profile.name?.[0]?.toUpperCase() || "?"}</div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{profile.name}</div>
+            <div style={{ fontSize: 10.5, color: C.sub, textTransform: "capitalize" }}>{profile.role}</div>
+          </div>
           <button onClick={() => signOut()} title="Sign out" style={{
-            border: "none", background: "transparent", color: C.railText, cursor: "pointer", padding: 6, display: "flex",
-          }}>
-            <LogOut size={15} />
-          </button>
+            border: "none", background: "transparent", color: C.sub, cursor: "pointer", padding: 4, display: "flex", flexShrink: 0,
+          }}><LogOut size={15} /></button>
         </div>
       </nav>
 
-      <div style={{ flex: 1, padding: "26px 32px", maxWidth: 1520, width: "100%", margin: "0 auto", boxSizing: "border-box" }}>
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
+        <div style={{
+          height: 60, flexShrink: 0, borderBottom: `1px solid ${C.line}`, background: C.panel,
+          display: "flex", alignItems: "center", padding: "0 28px", justifyContent: "space-between", boxSizing: "border-box",
+        }}>
+          <div style={{ fontSize: 13, color: C.sub }}>
+            {(NAV_SECTIONS.find(g => g.items.some(n => n.id === tab)) || {}).section}
+            {" "}<span style={{ color: C.ink, fontWeight: 600 }}>/ {(ALL_NAV.find(n => n.id === tab) || {}).label}</span>
+          </div>
+          <div style={{ fontSize: 11.5, color: C.sub }}>{batches.length} file{batches.length !== 1 ? "s" : ""} uploaded</div>
+        </div>
+
+        <div style={{ flex: 1, padding: "26px 32px", maxWidth: 1520, width: "100%", boxSizing: "border-box" }}>
         {loading ? (
           <div style={{ display: "flex", alignItems: "center", gap: 10, color: C.sub, fontSize: 14 }}>
             <Loader2 size={16} /> Loading saved history…
@@ -467,6 +447,7 @@ export default function App() {
             {tab === "formulas" && <FormulasTab />}
           </>
         )}
+        </div>
       </div>
       {callAgent && <CallModal agent={callAgent} onClose={() => setCallAgent(null)} onSave={logIntervention} />}
     </div>
@@ -636,7 +617,7 @@ function UploadTab({ pendingFiles, setPendingFiles, handleFiles, parseAllPending
             fontSize: 13.5, fontWeight: 600, cursor: "pointer",
           }}>Cancel</button>
           <button onClick={confirmSave} disabled={processing} style={{
-            flex: 2, background: C.emerald, color: "#fff", border: "none", padding: "11px 0",
+            flex: 2, background: C.emerald, color: "#fff", borderRadius: 8, border: "none", padding: "11px 0",
             fontSize: 13.5, fontWeight: 600, cursor: processing ? "default" : "pointer",
             display: "flex", alignItems: "center", justifyContent: "center", gap: 8, opacity: processing ? 0.7 : 1,
           }}>
@@ -685,7 +666,7 @@ function UploadTab({ pendingFiles, setPendingFiles, handleFiles, parseAllPending
             </div>
           ))}
           <button onClick={parseAllPending} disabled={processing} style={{
-            marginTop: 14, width: "100%", background: C.navy, color: "#fff", border: "none",
+            marginTop: 14, width: "100%", background: C.navy, color: "#fff", borderRadius: 8, border: "none",
             padding: "11px 0", fontSize: 13.5, fontWeight: 600, cursor: processing ? "default" : "pointer",
             display: "flex", alignItems: "center", justifyContent: "center", gap: 8, opacity: processing ? 0.7 : 1,
           }}>
@@ -970,7 +951,7 @@ function AgentsTab({ agg, trends }) {
             { label: "Formula Verified", get: a => a.allVerified ? "Yes" : "Check mismatch" },
             { label: "Manually Adjusted", get: a => a.hasAdjustment ? "Yes" : "" },
           ])} style={{
-            display: "flex", alignItems: "center", gap: 6, border: "none", background: C.emerald, color: "#fff",
+            display: "flex", alignItems: "center", gap: 6, border: "none", background: C.emerald, color: "#fff", borderRadius: 8,
             padding: "7px 13px", fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap",
           }}><Download size={13} /> Export CSV</button>
         </div>
@@ -1070,7 +1051,7 @@ function ProductsTab({ agg }) {
           { label: "Payout", get: p => p.payout.toFixed(2) }, { label: "Profit", get: p => p.profit.toFixed(2) },
           { label: "Commission", get: p => p.commission.toFixed(2) },
         ])} style={{
-          display: "flex", alignItems: "center", gap: 6, border: "none", background: C.emerald, color: "#fff",
+          display: "flex", alignItems: "center", gap: 6, border: "none", background: C.emerald, color: "#fff", borderRadius: 8,
           padding: "7px 13px", fontSize: 12, fontWeight: 600, cursor: "pointer",
         }}><Download size={13} /> Export CSV</button>
       }>
@@ -1120,7 +1101,7 @@ function StatesTab({ agg, trends }) {
           { label: "Profit", get: s => s.profit.toFixed(2) }, { label: "Avg per Agent", get: s => s.avgPerAgent.toFixed(2) },
           { label: "Commission", get: s => s.commission.toFixed(2) },
         ])} style={{
-          display: "flex", alignItems: "center", gap: 6, border: "none", background: C.emerald, color: "#fff",
+          display: "flex", alignItems: "center", gap: 6, border: "none", background: C.emerald, color: "#fff", borderRadius: 8,
           padding: "7px 13px", fontSize: 12, fontWeight: 600, cursor: "pointer",
         }}><Download size={13} /> Export CSV</button>
       }>
@@ -1209,7 +1190,7 @@ function LowActivityTab({ agg, trends, onCall }) {
                 </div>
               </div>
               <button onClick={() => onCall(a)} style={{
-                display: "flex", alignItems: "center", gap: 6, border: "none", background: C.navy, color: "#fff",
+                display: "flex", alignItems: "center", gap: 6, border: "none", background: C.navy, color: "#fff", borderRadius: 8,
                 padding: "7px 14px", fontSize: 12.5, cursor: "pointer", flexShrink: 0,
               }}>
                 <Phone size={13} /> Log call
@@ -1324,7 +1305,7 @@ function CallModal({ agent, onClose, onSave }) {
             <textarea value={form.notes} onChange={set("notes")} rows={2} style={{ width: "100%", border: `1px solid ${C.line}`, padding: "7px 9px", fontSize: 13, boxSizing: "border-box", fontFamily: "inherit", resize: "vertical" }} />
           </div>
           <button onClick={handleSave} disabled={saving} style={{
-            width: "100%", background: C.navy, color: "#fff", border: "none", padding: "10px 0", fontSize: 13,
+            width: "100%", background: C.navy, color: "#fff", borderRadius: 8, border: "none", padding: "10px 0", fontSize: 13,
             fontWeight: 600, cursor: saving ? "default" : "pointer", display: "flex", alignItems: "center",
             justifyContent: "center", gap: 6, opacity: saving ? 0.7 : 1,
           }}>
@@ -1457,7 +1438,7 @@ function AdjustmentModal({ mismatch, onClose, onSave }) {
           </div>
           {error && <div style={{ fontSize: 12, color: C.brick, marginBottom: 12 }}>{error}</div>}
           <button onClick={handleSave} disabled={saving} style={{
-            width: "100%", background: C.navy, color: "#fff", border: "none", padding: "10px 0", fontSize: 13,
+            width: "100%", background: C.navy, color: "#fff", borderRadius: 8, border: "none", padding: "10px 0", fontSize: 13,
             fontWeight: 600, cursor: saving ? "default" : "pointer", display: "flex", alignItems: "center",
             justifyContent: "center", gap: 6, opacity: saving ? 0.7 : 1,
           }}>
@@ -1544,7 +1525,7 @@ function ExportTab({ agg, canAdjust, userId, refreshAdjustments, logActivityFn }
           { label: "Balance (Globalbet only)", get: a => a.balance !== null ? a.balance.toFixed(2) : "" },
           { label: "Avg Stake (Globalbet only)", get: a => a.avgStake !== null ? a.avgStake.toFixed(2) : "" },
         ])} style={{
-          display: "flex", alignItems: "center", gap: 6, border: "none", background: C.emerald, color: "#fff",
+          display: "flex", alignItems: "center", gap: 6, border: "none", background: C.emerald, color: "#fff", borderRadius: 8,
           padding: "7px 14px", fontSize: 12.5, cursor: "pointer",
         }}><Download size={13} /> Download CSV</button>
       }>
@@ -1868,7 +1849,7 @@ function RulesTab({ ruleRows, setRuleRows, setRules, userId, logActivityFn, refr
               Turn override ON immediately (this rate will replace the sheet's value on save)
             </label>
             {addError && <div style={{ color: C.brick, fontSize: 12, marginBottom: 8 }}>{addError}</div>}
-            <button onClick={submitNewRule} disabled={adding} style={{ border: "none", background: C.navy, color: "#fff", padding: "8px 16px", fontSize: 12.5, cursor: "pointer" }}>
+            <button onClick={submitNewRule} disabled={adding} style={{ border: "none", background: C.navy, color: "#fff", borderRadius: 8, padding: "8px 16px", fontSize: 12.5, cursor: "pointer" }}>
               {adding ? <Loader2 size={13} /> : "Save rule"}
             </button>
 
@@ -1910,7 +1891,7 @@ function RulesTab({ ruleRows, setRuleRows, setRules, userId, logActivityFn, refr
                       <input type="checkbox" checked={draft.override} onChange={(e) => setEditing(prev => ({ ...prev, [rule.id]: { ...prev[rule.id], override: e.target.checked } }))} />
                       Override
                     </label>
-                    <button onClick={() => saveEdit(rule)} disabled={saving[rule.id]} style={{ border: "none", background: C.emerald, color: "#fff", padding: "6px 12px", fontSize: 12, cursor: "pointer" }}>
+                    <button onClick={() => saveEdit(rule)} disabled={saving[rule.id]} style={{ border: "none", background: C.emerald, color: "#fff", borderRadius: 8, padding: "6px 12px", fontSize: 12, cursor: "pointer" }}>
                       {saving[rule.id] ? <Loader2 size={12} /> : "Save"}
                     </button>
                     <button onClick={() => cancelEdit(rule.id)} style={{ border: `1px solid ${C.line}`, background: "none", padding: "6px 12px", fontSize: 12, cursor: "pointer" }}>Cancel</button>
@@ -2068,10 +2049,10 @@ function Kpi({ label, value, negative }) {
 }
 function Panel({ title, right, children, style }) {
   return (
-    <div style={{ background: C.panel, border: `1px solid ${C.line}`, marginBottom: 20, ...style }}>
+    <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, marginBottom: 20, overflow: "hidden", ...style }}>
       {title && (
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 18px", borderBottom: `1px solid ${C.line}` }}>
-          <div style={{ fontSize: 13.5, fontWeight: 600 }}>{title}</div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 18px", borderBottom: `1px solid ${C.line}`, background: "#FAFBFC" }}>
+          <div style={{ fontSize: 13.5, fontWeight: 700 }}>{title}</div>
           {right}
         </div>
       )}

@@ -177,8 +177,18 @@ function parseGB(rows) {
    bearing agents, so they're skipped rather than double-counting the same
    money at multiple tree levels. */
 function isFinancialOverviewFormat(rows) {
-  const first = rows && rows[0] ? String(rows[0][0] || rows[0].join(" ")) : "";
-  return first.toLowerCase().includes("financial overview");
+  // Title text alone isn't reliable: a real file confirmed both this
+  // tree-hierarchy export AND the older flat multi-block export share the
+  // phrase "Financial Overview report for agent..." in their title line.
+  // What's actually unique to THIS format is the "Currency" column (it's how
+  // the EUR/NGN row-pairs are distinguished) -- the flat format has no such
+  // column. Structural signature, not text matching, so it can't be fooled
+  // by two reports that happen to share similar wording.
+  for (let i = 0; i < Math.min(rows.length, 4); i++) {
+    const row = rows[i];
+    if (row && row.some(cell => String(cell).trim().toLowerCase() === "currency")) return true;
+  }
+  return false;
 }
 const AGENT_USERNAME_RE = /^(?:\d{2}\d{2}[a-zA-Z]{2}-[a-zA-Z0-9]{2,6}-.+|\d{3}[a-zA-Z]{2}-[a-zA-Z0-9]{2,6}-.+)$/;
 function stripTreePrefix(raw) {
@@ -221,7 +231,18 @@ function parseGBFinancialOverview(rows) {
     i++; // consumed the NGN row either way
 
     if (!sawRoot) { sawRoot = true; continue; }
-    if (isOnlineUsername(rawUsername)) continue; // separate payment process, not this run
+    if (isOnlineUsername(rawUsername)) {
+      // Excluded entirely -- but the context has to close too: an online
+      // agent can have its own "-cashierN" sub-accounts in the tree (confirmed:
+      // elb-6fatima23 has three), and without resetting currentAgentKey here,
+      // those cashier rows would silently fall through to whichever branch
+      // agent happened to be open right before this online entry -- a real
+      // bug found against real data (₦1,239,900 misattributed to an innocent
+      // agent). Setting it to null means an orphaned cashier is correctly left
+      // unattributed rather than guessed into the wrong agent's total.
+      currentAgentKey = null;
+      continue;
+    }
 
     const tickets = money(get(row, 3)), stake = money(get(nextRow, 5)), payout = money(get(nextRow, 6));
     const profit = money(get(nextRow, 17)), commission = money(get(nextRow, 15));
@@ -501,11 +522,20 @@ function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES, adjustments
       }
       // The payable commission, in priority order: a manual adjustment (someone
       // looked at exactly this line and corrected it, with a reason on record)
-      // beats a rule override (a whole product/type recalculated), which beats
-      // the sheet's own value. Each is a deliberate, visible escalation -- never
-      // a silent one.
+      // beats the "online agents aren't paid" policy, which beats a rule
+      // override (a whole product/type recalculated), which beats the sheet's
+      // own value. Online is enforced here -- not left to each parser -- so it
+      // holds for every product the same way, even if a future sheet ever
+      // shows a nonzero commission for an online agent (confirmed policy:
+      // "we don't pay commission to account with Elb or online," stated
+      // generally, not product-by-product). Stake/payout/profit still count
+      // for online agents, so their activity stays visible in reporting --
+      // only the payable commission is forced to zero.
       const adjustment = adjustmentMap.get(adjustmentKey(batch.id, item.agentUsername, item.sourceBlock));
-      const payableCommission = adjustment ? adjustment.adjustedCommission : (isOverride ? calc : (item.commissionAmount || 0));
+      const isOnlinePolicyZero = meta.channel === "online" && !adjustment;
+      const payableCommission = adjustment ? adjustment.adjustedCommission
+        : isOnlinePolicyZero ? 0
+        : isOverride ? calc : (item.commissionAmount || 0);
       if (adjustment) {
         adjustedCount++;
         appliedAdjustments.push({

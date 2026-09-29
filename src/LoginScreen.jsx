@@ -3,19 +3,18 @@ import { Loader2 } from "lucide-react";
 import { signIn } from "./lib/dataLayer";
 
 const C = {
-  paper: "#F3EEE1", panel: "#FBF9F4", ink: "#1C1A15", sub: "#6B6355", line: "#DED5BE",
-  emerald: "#2F5B3F", brick: "#9C3B2C", navy: "#1C1A15",
-  railBg: "#1B2A20", railText: "#C9C2A8", railTextActive: "#F5F1E4", stamp: "#A3441F",
+  paper: "#0C0A14", panel: "#161320", ink: "#F1EEFA", sub: "#8B84A3", line: "#292340",
+  emerald: "#34D399", brick: "#F87171", navy: "#8B5CF6",
+  railBg: "#0C0A14", railText: "#EDE9FE", railTextActive: "#FFFFFF", stamp: "#8B5CF6",
 };
-const serif = { fontFamily: "'Fraunces', Georgia, serif" };
+const serif = { fontFamily: "'IBM Plex Sans', -apple-system, sans-serif", fontWeight: 700 };
 const sans = { fontFamily: "'IBM Plex Sans', -apple-system, sans-serif" };
 
 function RobusticMark({ size = 40 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 34 34">
-      <circle cx="17" cy="17" r="15.5" fill="none" stroke={C.stamp} strokeWidth="1.4" strokeDasharray="1.6 2.4" />
-      <circle cx="17" cy="17" r="11.5" fill="none" stroke={C.railTextActive} strokeWidth="0.75" opacity="0.45" />
-      <text x="17" y="22.5" textAnchor="middle" fontFamily="Fraunces, Georgia, serif" fontSize="14" fontWeight="600" fill={C.railTextActive}>R</text>
+      <rect x="1" y="1" width="32" height="32" rx="9" fill={C.stamp} />
+      <text x="17" y="22.5" textAnchor="middle" fontFamily="'IBM Plex Sans', sans-serif" fontSize="14" fontWeight="700" fill="#0C0A14">R</text>
     </svg>
   );
 }
@@ -45,7 +44,7 @@ export default function LoginScreen({ onSignedIn }) {
       minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
       background: C.railBg, ...sans,
     }}>
-      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" />
+      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" />
 
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 28, position: "absolute", top: 40 }}>
         <RobusticMark />
@@ -53,21 +52,21 @@ export default function LoginScreen({ onSignedIn }) {
       </div>
 
       <form onSubmit={handleSubmit} style={{
-        background: C.panel, padding: "38px 34px", width: 368, boxShadow: "0 24px 60px rgba(0,0,0,0.28)",
+        background: C.panel, border: `1px solid ${C.line}`, padding: "38px 34px", width: 368, boxShadow: "0 24px 60px rgba(0,0,0,0.5)",
       }}>
-        <div style={{ ...serif, fontSize: 20, fontWeight: 600, marginBottom: 3, color: C.ink }}>Sign in</div>
+        <div style={{ ...serif, fontSize: 20, marginBottom: 3, color: C.ink }}>Sign in</div>
         <div style={{ fontSize: 12.5, color: C.sub, marginBottom: 28 }}>Sales &amp; Commission Reporting</div>
 
         <label style={{ display: "block", fontSize: 12, color: C.sub, marginBottom: 5 }}>Email</label>
         <input
           type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus
-          style={{ width: "100%", border: `1px solid ${C.line}`, padding: "9px 11px", fontSize: 13.5, boxSizing: "border-box", marginBottom: 16, background: "#fff" }}
+          style={{ width: "100%", border: `1px solid ${C.line}`, padding: "9px 11px", fontSize: 13.5, boxSizing: "border-box", marginBottom: 16, background: C.paper, color: C.ink }}
         />
 
         <label style={{ display: "block", fontSize: 12, color: C.sub, marginBottom: 5 }}>Password</label>
         <input
           type="password" value={password} onChange={(e) => setPassword(e.target.value)} required
-          style={{ width: "100%", border: `1px solid ${C.line}`, padding: "9px 11px", fontSize: 13.5, boxSizing: "border-box", marginBottom: 20, background: "#fff" }}
+          style={{ width: "100%", border: `1px solid ${C.line}`, padding: "9px 11px", fontSize: 13.5, boxSizing: "border-box", marginBottom: 20, background: C.paper, color: C.ink }}
         />
 
         {error && <div style={{ color: C.brick, fontSize: 12.5, marginBottom: 16 }}>{error}</div>}

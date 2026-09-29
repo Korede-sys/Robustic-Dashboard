@@ -351,32 +351,49 @@ export default function App() {
         }
         input::placeholder, textarea::placeholder { color: ${C.sub}; }
         input:focus, select:focus, textarea:focus { outline: 2px solid ${C.navy}22; border-color: ${C.navy}; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .lucide-loader-2 { animation: spin 0.8s linear infinite; }
+        th {
+          padding: 10px 12px; text-transform: uppercase; font-size: 10.5px; letter-spacing: .04em;
+          font-weight: 700; color: ${C.sub}; text-align: left; border-bottom: 1px solid ${C.line};
+          background: #FAFBFC; white-space: nowrap;
+        }
+        td { padding: 11px 12px; }
+        table { border-collapse: collapse; width: 100%; }
+        @media (max-width: 900px) {
+          .app-sidebar { width: 72px !important; }
+          .app-sidebar .nav-label-text, .app-sidebar .nav-section-label, .app-sidebar .nav-user-detail { display: none !important; }
+        }
+        @media (max-width: 640px) {
+          .kpi-row { flex-wrap: wrap !important; }
+          .kpi-row > div { min-width: calc(50% - 7px) !important; flex: none !important; }
+        }
       `}</style>
 
-      <nav aria-label="Main" style={{
+      <nav aria-label="Main" className="app-sidebar" style={{
         width: 236, flexShrink: 0, background: C.railBg, borderRight: `1px solid ${C.line}`,
         display: "flex", flexDirection: "column", padding: "20px 14px", boxSizing: "border-box", height: "100vh",
         position: "sticky", top: 0, overflowY: "auto",
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "4px 10px 24px" }}>
           <RobusticMark />
-          <span style={{ ...serif, fontSize: 16, color: C.ink, letterSpacing: -0.3 }}>Robustic</span>
+          <span className="nav-label-text" style={{ ...serif, fontSize: 16, color: C.ink, letterSpacing: -0.3 }}>Robustic</span>
         </div>
         <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 16 }}>
           {NAV_SECTIONS.map((group) => (
             <div key={group.section}>
-              <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 0.6, color: "#A2A6B5", padding: "0 10px 6px", textTransform: "uppercase" }}>
+              <div className="nav-section-label" style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 0.6, color: "#A2A6B5", padding: "0 10px 6px", textTransform: "uppercase" }}>
                 {group.section}
               </div>
               {group.items.map((n) => {
                 const Icon = n.icon; const active = tab === n.id;
                 return (
-                  <button key={n.id} onClick={() => setTab(n.id)} style={{
+                  <button key={n.id} onClick={() => setTab(n.id)} title={n.label} style={{
                     display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "9px 12px",
                     border: "none", background: active ? C.railActiveBg : "transparent",
                     color: active ? C.railTextActive : C.railText, borderRadius: 8, cursor: "pointer",
                     fontSize: 13.5, fontWeight: active ? 700 : 500, textAlign: "left", marginBottom: 2,
-                  }}><Icon size={15} strokeWidth={2.2} />{n.label}</button>
+                  }}><Icon size={15} strokeWidth={2.2} style={{ flexShrink: 0 }} /><span className="nav-label-text">{n.label}</span></button>
                 );
               })}
             </div>
@@ -387,7 +404,7 @@ export default function App() {
             width: 28, height: 28, borderRadius: 999, background: C.stamp, display: "flex",
             alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, color: "#fff", flexShrink: 0,
           }}>{profile.name?.[0]?.toUpperCase() || "?"}</div>
-          <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="nav-user-detail" style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{profile.name}</div>
             <div style={{ fontSize: 10.5, color: C.sub, textTransform: "capitalize" }}>{profile.role}</div>
           </div>
@@ -469,7 +486,9 @@ function RobusticMark() {
 
 function FullScreenMessage({ children }) {
   return (
-    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: C.sub, ...sans }}>
+    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", gap: 10, color: C.sub, background: C.paper, fontSize: 14, ...sans }}>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } } .lucide-loader-2 { animation: spin 0.8s linear infinite; }`}</style>
+      <Loader2 size={16} />
       {children}
     </div>
   );
@@ -593,7 +612,7 @@ function UploadTab({ pendingFiles, setPendingFiles, handleFiles, parseAllPending
             </div>
           ))}
         </Panel>
-        <div style={{ display: "flex", gap: 14, marginBottom: 20 }}>
+        <div className="kpi-row" style={{ display: "flex", gap: 14, marginBottom: 20 }}>
           <Kpi label="Agents" value={agg.agents.length} />
           <Kpi label="Total Stake" value={nairaShort(agg.totals.stake)} />
           <Kpi label="Total Commission" value={nairaShort(agg.totals.commission)} />
@@ -751,7 +770,7 @@ function ReportsTab({ batches, selectedKeys, setSelectedKeys, rules, adjustments
           {REPORT_VIEWS.map(([id, label]) => (
             <button key={id} onClick={() => setView(id)} style={{
               padding: "7px 16px", border: `1px solid ${view === id ? C.navy : C.line}`,
-              background: view === id ? C.navy : C.panel, color: view === id ? "#0C0A14" : C.sub,
+              background: view === id ? C.navy : C.panel, color: view === id ? "#fff" : C.sub,
               fontSize: 12.5, fontWeight: 600, cursor: "pointer",
             }}>{label}</button>
           ))}
@@ -796,7 +815,7 @@ function OverviewTab({ agg, trends, series, hasData }) {
   return (
     <>
       <h1 style={{ ...serif, fontSize: 28, fontWeight: 500, margin: "0 0 20px" }}>Overview</h1>
-      <div style={{ display: "flex", gap: 14, marginBottom: 20 }}>
+      <div className="kpi-row" style={{ display: "flex", gap: 14, marginBottom: 20 }}>
         <Kpi label="Total Stake" value={nairaShort(agg.totals.stake)} />
         <Kpi label="Total Payout" value={nairaShort(agg.totals.payout)} />
         <Kpi label="Net Profit" value={nairaShort(agg.totals.profit)} negative={agg.totals.profit < 0} />
@@ -910,10 +929,19 @@ function TrendBadge({ username, trends }) {
   );
 }
 
-function EmptyState() {
+function EmptyState({ title = "Nothing here yet", description = "Head to Upload & Process to bring in your first sheet.", icon: Icon = FileSpreadsheet }) {
   return (
     <Panel>
-      <div style={{ fontSize: 13.5, color: C.sub }}>Nothing uploaded yet. Head to Upload &amp; Process to bring in your first sheet.</div>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "36px 20px", textAlign: "center" }}>
+        <div style={{
+          width: 48, height: 48, borderRadius: 12, background: C.stampSoft, display: "flex",
+          alignItems: "center", justifyContent: "center", marginBottom: 14,
+        }}>
+          <Icon size={22} color={C.navy} strokeWidth={1.75} />
+        </div>
+        <div style={{ fontSize: 14.5, fontWeight: 700, marginBottom: 4 }}>{title}</div>
+        <div style={{ fontSize: 13, color: C.sub, maxWidth: 340, lineHeight: 1.5 }}>{description}</div>
+      </div>
     </Panel>
   );
 }
@@ -964,7 +992,7 @@ function AgentsTab({ agg, trends }) {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 1280 }}>
             <thead style={{ position: "sticky", top: 0, background: C.panel }}>
               <tr style={{ textAlign: "left", color: C.sub, fontSize: 11.5 }}>
-                <th style={{ padding: "6px 8px", borderBottom: `1px solid ${C.line}`, fontWeight: 500 }}>Rank</th>
+                <th>Rank</th>
                 <SortableTh label="Agent" field="username" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortableTh label="State" field="state" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortableTh label="Stake" field="stake" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
@@ -976,8 +1004,8 @@ function AgentsTab({ agg, trends }) {
                 <SortableTh label="Palliative" field="palliative" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortableTh label="Gift" field="gift" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortableTh label="Total Earnings" field="totalEarnings" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <th style={{ padding: "6px 8px", borderBottom: `1px solid ${C.line}`, fontWeight: 500, whiteSpace: "nowrap" }}>Trend</th>
-                <th style={{ padding: "6px 8px", borderBottom: `1px solid ${C.line}`, fontWeight: 500, whiteSpace: "nowrap" }}>Products</th>
+                <th>Trend</th>
+                <th>Products</th>
               </tr>
             </thead>
             <tbody>
@@ -1116,7 +1144,7 @@ function StatesTab({ agg, trends }) {
                 <SortableTh label="Profit" field="profit" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortableTh label="Avg / agent" field="avgPerAgent" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <SortableTh label="Commission" field="commission" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                <th style={{ padding: "6px 8px", borderBottom: `1px solid ${C.line}`, fontWeight: 500 }}>Trend</th>
+                <th>Trend</th>
               </tr>
             </thead>
             <tbody>
@@ -1547,9 +1575,10 @@ function ExportTab({ agg, canAdjust, userId, refreshAdjustments, logActivityFn }
                   <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}` }}>{naira(a.sourceCommission)}</td>
                   <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}` }}>{a.monthlyBonus ? naira(a.monthlyBonus) : "—"}</td>
                   <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}`, fontWeight: 600 }}>{naira(a.sourceCommission + a.monthlyBonus)}</td>
-                  <td style={{ padding: "8px", borderBottom: `1px solid ${C.line}`, display: "flex", gap: 4 }}>
-                    {!a.allVerified && <ShieldAlert size={14} color={C.brick} />}
-                    {a.hasAdjustment && <span title="Manually adjusted" style={{ fontSize: 10, color: C.navy, border: `1px solid ${C.navy}`, borderRadius: 3, padding: "1px 4px" }}>ADJ</span>}
+                  <td style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                    {a.hasAdjustment ? <StatusBadge tone="amber">Adjusted</StatusBadge>
+                      : a.allVerified ? <StatusBadge tone="green">Verified</StatusBadge>
+                      : <StatusBadge tone="red">Check mismatch</StatusBadge>}
                   </td>
                 </tr>
               ))}
@@ -2031,8 +2060,7 @@ function SortableTh({ label, field, sortKey, sortDir, onSort }) {
   const active = field === sortKey;
   return (
     <th onClick={() => onSort(field)} style={{
-      padding: "6px 8px", borderBottom: `1px solid ${C.line}`, fontWeight: active ? 700 : 500,
-      cursor: "pointer", whiteSpace: "nowrap", userSelect: "none", color: active ? C.ink : C.sub,
+      fontWeight: active ? 800 : 700, cursor: "pointer", userSelect: "none", color: active ? C.navy : C.sub,
     }}>
       {label}{active && (sortDir === "asc" ? " ↑" : " ↓")}
     </th>
@@ -2041,10 +2069,24 @@ function SortableTh({ label, field, sortKey, sortDir, onSort }) {
 
 function Kpi({ label, value, negative }) {
   return (
-    <div style={{ background: C.panel, border: `1px solid ${C.line}`, padding: "16px 18px", flex: 1 }}>
-      <div style={{ fontSize: 12, color: C.sub, marginBottom: 8 }}>{label}</div>
-      <div style={{ ...serif, ...nums, fontSize: 22, fontWeight: 500, color: negative ? C.brick : C.ink }}>{value}</div>
+    <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: "16px 18px", flex: 1 }}>
+      <div style={{ fontSize: 12, color: C.sub, marginBottom: 8, fontWeight: 600 }}>{label}</div>
+      <div style={{ ...mono, fontSize: 24, fontWeight: 700, color: negative ? C.brick : C.ink }}>{value}</div>
     </div>
+  );
+}
+function StatusBadge({ tone = "neutral", children }) {
+  const tones = {
+    green: { bg: C.emeraldSoft, fg: C.emerald }, amber: { bg: C.amberSoft, fg: C.amber },
+    red: { bg: C.brickSoft, fg: C.brick }, indigo: { bg: C.stampSoft, fg: C.navy },
+    neutral: { bg: "#F0F1F5", fg: C.sub },
+  };
+  const t = tones[tone] || tones.neutral;
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center", fontSize: 10.5, fontWeight: 700, padding: "3px 9px",
+      borderRadius: 6, background: t.bg, color: t.fg, whiteSpace: "nowrap",
+    }}>{children}</span>
   );
 }
 function Panel({ title, right, children, style }) {

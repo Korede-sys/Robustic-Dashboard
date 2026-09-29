@@ -45,6 +45,7 @@ export default function LoginScreen({ onSignedIn }) {
       background: C.railBg, ...sans,
     }}>
       <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500;600&display=swap" />
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } } .lucide-loader-2 { animation: spin 0.8s linear infinite; }`}</style>
 
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 28, position: "absolute", top: 40 }}>
         <RobusticMark />

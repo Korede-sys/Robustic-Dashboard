@@ -499,10 +499,28 @@ function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES, adjustments
 
   const PRODUCT_OF = productOf;
 
+  // Globalbet-specific: when both the tree-hierarchy export (GB:FIN_OVERVIEW,
+  // cashier-rolled-up) and the legacy flat export (GB:BLOCK_A, agent's own row
+  // only) are uploaded for the same period, the legacy file's stake/payout/
+  // profit/commission for an agent would double-count money the tree file
+  // already captured completely -- confirmed against real data: the same
+  // agent's legacy-row stake was exactly half their tree-format total, the
+  // other half being cashier activity the legacy format can't see at all.
+  // Confirmed policy: the tree format is authoritative for stake/commission
+  // whenever both are present; the legacy file's Bonus/Palliative/Gift still
+  // counts, since the tree format has no such columns to conflict with.
+  const treeCoveredGBAgents = new Set();
+  for (const batch of batches) {
+    for (const item of batch.items) {
+      if (item.sourceBlock === "GB:FIN_OVERVIEW") treeCoveredGBAgents.add(item.agentUsername.toLowerCase());
+    }
+  }
+
   for (const batch of batches) {
     for (const item of batch.items) {
       if (EXCLUDED_BLOCKS.has(item.sourceBlock) || !STRUCTURALLY_TRUSTED.has(item.sourceBlock)) continue;
       if (item.isHouse) continue;
+      if (item.sourceBlock === "GB:BLOCK_A" && treeCoveredGBAgents.has(item.agentUsername.toLowerCase())) continue;
       const meta = decodeAgent(item.agentUsername);
       let calc, confidence, verified, diff, diffPct, isOverride;
       if (meta.channel === "online") {
@@ -582,6 +600,17 @@ function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES, adjustments
       s.stake += item.stake || 0; s.payout += item.payout || 0; s.profit += item.profit || 0; s.commission += payableCommission;
       s.agents.add(key);
     }
+  }
+  // Separate top-level pass, after every batch's items have built the full
+  // agentMap -- not nested inside the items loop above. Supplemental payments
+  // (bonus/palliative/gift/monthly_bonus) need their agent to already exist
+  // in agentMap, and with the Globalbet tree+legacy merge, the batch that
+  // creates an agent's entry (the tree file) and the batch carrying their
+  // bonus (the legacy file) can be uploaded, and therefore processed, in
+  // either order -- this ensures a bonus is never silently dropped just
+  // because its batch happened to be processed before the one with the
+  // matching stake/commission items.
+  for (const batch of batches) {
     for (const supp of batch.supplemental) {
       // Every supplemental payment type counts toward monthlyBonus (the combined
       // total used everywhere else) -- but bonus/palliative/gift are also tracked

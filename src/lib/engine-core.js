@@ -210,31 +210,21 @@ function stripTreePrefix(raw) {
   return String(raw || "").replace(/^[\s|\\_]+/, "").trim();
 }
 function isOnlineUsername(u) { return String(u || "").toLowerCase().startsWith("elb-"); }
-const CASHIER_SUFFIX_RE = /-cashier\d+$/i;
 
 function parseGBFinancialOverview(rows) {
-  // Walks the tree in file order, keeping "the most recently seen agent" as
-  // context: an agent row opens a new context and starts its own totals; any
-  // row that follows and does NOT itself match the agent pattern (a cashier
-  // sub-account, e.g. "ugocalis-cashier1" under "...-ugocalis") is rolled
-  // into that open context rather than kept separate -- confirmed business
-  // rule: a cashier is the same agent's operation split across terminals,
-  // not an independently payable entity. elb- prefixed rows are online-
-  // channel agents, paid through a separate process -- excluded here
-  // entirely, and do NOT close/replace the current branch-agent context (a
-  // cashier row immediately after an online row still belongs to whichever
-  // branch agent opened the context). The very first entity in the file is
-  // the reseller-level rollup (e.g. "AccessBET") -- not a payable agent,
-  // and explicitly does not open a context, so nothing gets wrongly
-  // attributed to it if the tree ever returns to another top-level branch.
+  // Walks the tree in file order. Confirmed policy (reversed from an earlier
+  // decision in this same system): cashier sub-accounts (e.g.
+  // "ugocalis-cashier1" under "...-ugocalis") are NOT paid commission and
+  // their stake does NOT count toward the parent agent's total -- only each
+  // agent's own row does, matching AccessBET's own summary row and the
+  // legacy flat export exactly. So cashier rows are simply skipped here,
+  // the same as any other row that isn't itself a recognized agent/shop --
+  // no rollup, no addTo. elb- prefixed rows are online-channel agents, paid
+  // through a separate process -- also excluded. The very first entity in
+  // the file is the reseller-level rollup (e.g. "AccessBET") -- not a
+  // payable agent, skipped too.
   const byAgent = new Map();
-  let currentAgentKey = null;
   let sawRoot = false;
-
-  const addTo = (item, tickets, stake, payout, profit, commission) => {
-    item.tickets += tickets || 0; item.stake += stake || 0; item.payout += payout || 0;
-    item.profit += profit || 0; item.commissionAmount += commission || 0;
-  };
 
   for (let i = 2; i < rows.length; i++) {
     const row = rows[i];
@@ -246,40 +236,22 @@ function parseGBFinancialOverview(rows) {
     i++; // consumed the NGN row either way
 
     if (!sawRoot) { sawRoot = true; continue; }
-    if (isOnlineUsername(rawUsername)) {
-      // Excluded entirely -- but the context has to close too: an online
-      // agent can have its own "-cashierN" sub-accounts in the tree (confirmed:
-      // elb-6fatima23 has three), and without resetting currentAgentKey here,
-      // those cashier rows would silently fall through to whichever branch
-      // agent happened to be open right before this online entry -- a real
-      // bug found against real data (₦1,239,900 misattributed to an innocent
-      // agent). Setting it to null means an orphaned cashier is correctly left
-      // unattributed rather than guessed into the wrong agent's total.
-      currentAgentKey = null;
-      continue;
-    }
+    // Online agents and cashier sub-accounts are both excluded -- neither is
+    // rolled into anyone else. Any row that isn't itself a recognized agent
+    // (AGENT_USERNAME_RE) is simply skipped, whatever it is: a cashier, an
+    // online account, or an unrecognized format.
+    if (isOnlineUsername(rawUsername)) continue;
+    if (!AGENT_USERNAME_RE.test(rawUsername)) continue;
 
     const tickets = money(get(row, 3)), stake = money(get(nextRow, 5)), payout = money(get(nextRow, 6));
     const profit = money(get(nextRow, 17)), commission = money(get(nextRow, 15));
-
-    if (AGENT_USERNAME_RE.test(rawUsername)) {
-      const key = rawUsername.toLowerCase();
-      currentAgentKey = key;
-      if (!byAgent.has(key)) {
-        byAgent.set(key, {
-          agentUsername: rawUsername, sourceBlock: "GB:FIN_OVERVIEW",
-          tickets: 0, stake: 0, payout: 0, profit: 0, commissionAmount: 0,
-          commissionType: null, balance: null, isHouse: isHouseAgent(rawUsername),
-          totalEarnings: null, avgStake: null,
-        });
-      }
-      addTo(byAgent.get(key), tickets, stake, payout, profit, commission);
-    } else if (currentAgentKey && CASHIER_SUFFIX_RE.test(rawUsername)) {
-      addTo(byAgent.get(currentAgentKey), tickets, stake, payout, profit, commission);
-    }
-    // else: a row that's neither a recognized agent nor a "-cashierN" sub-account
-    // of one (e.g. an unrecognized username prefix) -- left out rather than
-    // guessed into someone else's total. See the parsing notes for known cases.
+    const key = rawUsername.toLowerCase();
+    byAgent.set(key, {
+      agentUsername: rawUsername, sourceBlock: "GB:FIN_OVERVIEW",
+      tickets: tickets || 0, stake: stake || 0, payout: payout || 0, profit: profit || 0, commissionAmount: commission || 0,
+      commissionType: null, balance: null, isHouse: isHouseAgent(rawUsername),
+      totalEarnings: null, avgStake: null,
+    });
   }
   return { items: Array.from(byAgent.values()), supplemental: [] };
 }
@@ -514,20 +486,20 @@ function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES, adjustments
 
   const PRODUCT_OF = productOf;
 
-  // Globalbet-specific: when both the tree-hierarchy export (GB:FIN_OVERVIEW,
-  // cashier-rolled-up) and the legacy flat export (GB:BLOCK_A, agent's own row
-  // only) are uploaded for the same period, the legacy file's stake/payout/
-  // profit/commission for an agent would double-count money the tree file
-  // already captured completely -- confirmed against real data: the same
-  // agent's legacy-row stake was exactly half their tree-format total, the
-  // other half being cashier activity the legacy format can't see at all.
-  // Confirmed policy: the tree format is authoritative for stake/commission
-  // whenever both are present; the legacy file's Bonus/Palliative/Gift still
-  // counts, since the tree format has no such columns to conflict with.
-  const treeCoveredGBAgents = new Set();
+  // Globalbet-specific: cashier sub-account money no longer rolls into either
+  // format (confirmed reversal -- cashier commission isn't actually paid), so
+  // the tree-hierarchy export (GB:FIN_OVERVIEW) and the legacy flat export
+  // (GB:BLOCK_A) now report the SAME agent-own-row number for the same
+  // agent. That means uploading both for the same period would double-count
+  // if both were allowed to contribute -- so when both are present, the
+  // legacy file is treated as authoritative (it's also the only source for
+  // Bonus/Palliative/Gift) and the tree file's contribution for that same
+  // agent is suppressed, the mirror image of the priority this used to have
+  // before the reversal.
+  const legacyCoveredGBAgents = new Set();
   for (const batch of batches) {
     for (const item of batch.items) {
-      if (item.sourceBlock === "GB:FIN_OVERVIEW") treeCoveredGBAgents.add(item.agentUsername.toLowerCase());
+      if (item.sourceBlock === "GB:BLOCK_A") legacyCoveredGBAgents.add(item.agentUsername.toLowerCase());
     }
   }
 
@@ -535,7 +507,7 @@ function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES, adjustments
     for (const item of batch.items) {
       if (EXCLUDED_BLOCKS.has(item.sourceBlock) || !STRUCTURALLY_TRUSTED.has(item.sourceBlock)) continue;
       if (item.isHouse) continue;
-      if (item.sourceBlock === "GB:BLOCK_A" && treeCoveredGBAgents.has(item.agentUsername.toLowerCase())) continue;
+      if (item.sourceBlock === "GB:FIN_OVERVIEW" && legacyCoveredGBAgents.has(item.agentUsername.toLowerCase())) continue;
       const meta = decodeAgent(item.agentUsername);
       let calc, confidence, verified, diff, diffPct, isOverride;
       if (meta.channel === "online") {

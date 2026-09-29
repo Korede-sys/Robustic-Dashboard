@@ -54,6 +54,15 @@ function money(v) {
   return isNaN(n) ? null : n;
 }
 
+// Confirmed, real, payable agents whose usernames don't match any of the
+// coding patterns decodeAgent otherwise looks for -- added one at a time,
+// only after direct confirmation. This is NOT a general relaxation of the
+// "unrecognized format = excluded" rule; broadening that would risk quietly
+// paying genuine house/aggregate rows like "000 ONLINE" or "AccessBET" as
+// if they were agents. "yin76" -- confirmed: a real Sports agent with no
+// encoded state/branch in their username.
+const CONFIRMED_EXCEPTION_AGENTS = new Set(["yin76"]);
+
 function decodeAgent(username) {
   const m = /^(\d{2})(\d{2})([a-zA-Z]{2})-([a-zA-Z0-9]{2,6})-(.+)$/.exec(username);
   if (m) {
@@ -85,6 +94,12 @@ function decodeAgent(username) {
   }
   if (username.toLowerCase().startsWith("elb-")) {
     return { username, onboardedMonth: null, stateCode: null, stateName: "Online", branchCode: null, channel: "online" };
+  }
+  // Explicit, one-at-a-time exceptions: usernames confirmed as real, payable
+  // agents despite not matching any coding pattern above (see
+  // CONFIRMED_EXCEPTION_AGENTS at module scope for why this stays narrow).
+  if (CONFIRMED_EXCEPTION_AGENTS.has(username.toLowerCase())) {
+    return { username, onboardedMonth: null, stateCode: null, stateName: "Unknown", branchCode: null, channel: "branch" };
   }
   return { username, onboardedMonth: null, stateCode: null, stateName: "Unknown", branchCode: null, channel: "unknown" };
 }

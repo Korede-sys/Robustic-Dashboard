@@ -557,32 +557,38 @@ function ReportFilters({ batches, selectedKeys, setSelectedKeys }) {
 
   return (
     <div style={{ marginBottom: 20 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-        {DATE_PRESETS.map(p => (
-          <button key={p.id} onClick={() => applyPreset(p.id)} style={{
-            border: `1px solid ${preset === p.id ? C.emerald : C.line}`,
-            background: preset === p.id ? C.emeraldSoft : "transparent",
-            color: preset === p.id ? C.emerald : C.sub, padding: "6px 13px", fontSize: 12, fontWeight: 500, cursor: "pointer",
-          }}>{p.label}</button>
-        ))}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ display: "inline-flex", gap: 4, background: C.line, padding: 4, borderRadius: 10 }}>
+          {DATE_PRESETS.map(p => (
+            <button key={p.id} onClick={() => applyPreset(p.id)} style={{
+              border: "none", borderRadius: 7, background: preset === p.id ? C.panel : "transparent",
+              color: preset === p.id ? C.ink : C.sub, padding: "6px 13px", fontSize: 12,
+              fontWeight: preset === p.id ? 700 : 500, cursor: "pointer",
+              boxShadow: preset === p.id ? "0 1px 3px rgba(15,18,34,0.12)" : "none", transition: "all .12s",
+            }}>{p.label}</button>
+          ))}
+        </div>
         {preset === "custom" && (
-          <span style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 4 }}>
+          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <input type="date" value={customStart} onChange={(e) => applyCustom(e.target.value, customEnd)}
-              style={{ border: `1px solid ${C.line}`, padding: "5px 8px", fontSize: 12 }} />
+              style={{ border: `1px solid ${C.line}`, borderRadius: 7, padding: "5px 8px", fontSize: 12 }} />
             <span style={{ color: C.sub, fontSize: 12 }}>to</span>
             <input type="date" value={customEnd} onChange={(e) => applyCustom(customStart, e.target.value)}
-              style={{ border: `1px solid ${C.line}`, padding: "5px 8px", fontSize: 12 }} />
+              style={{ border: `1px solid ${C.line}`, borderRadius: 7, padding: "5px 8px", fontSize: 12 }} />
           </span>
         )}
         <span style={{ flex: 1 }} />
-        <span style={{ fontSize: 11.5, color: C.sub }}>{selectedKeys.size} of {batches.length} file(s) included</span>
-        <button onClick={() => setShowFiles(v => !v)} style={{ border: "none", background: "none", color: C.sub, fontSize: 11.5, cursor: "pointer", textDecoration: "underline" }}>
-          {showFiles ? "Hide" : "Select files individually"}
+        <span style={{
+          fontSize: 11, fontWeight: 600, color: C.sub, background: C.line, borderRadius: 999, padding: "4px 11px",
+        }}>{selectedKeys.size} of {batches.length} file{batches.length !== 1 ? "s" : ""}</span>
+        <button onClick={() => setShowFiles(v => !v)} style={{ border: "none", background: "none", color: C.navy, fontSize: 11.5, fontWeight: 600, cursor: "pointer" }}>
+          {showFiles ? "Hide file list" : "Select individually"}
         </button>
       </div>
       {datedCount < batches.length && (
-        <div style={{ fontSize: 11.5, color: C.amber, marginTop: 6 }}>
-          {batches.length - datedCount} file(s) have no confirmed reporting period, so date filters skip them — use "Select files individually" to include them.
+        <div style={{ fontSize: 11.5, color: C.amber, marginTop: 8, display: "flex", alignItems: "center", gap: 6 }}>
+          <AlertTriangle size={12} style={{ flexShrink: 0 }} />
+          {batches.length - datedCount} file(s) have no confirmed reporting period, so date filters skip them — use "Select individually" to include them.
         </div>
       )}
       {showFiles && (
@@ -797,12 +803,13 @@ function ReportsTab({ batches, selectedKeys, setSelectedKeys, rules, adjustments
     <>
       <div style={{ marginBottom: 16 }}>
         <h1 style={{ ...serif, fontSize: 30, fontWeight: 500, margin: "0 0 10px" }}>Reports</h1>
-        <div style={{ display: "flex", gap: 6 }}>
+        <div style={{ display: "inline-flex", gap: 4, background: C.line, padding: 4, borderRadius: 10 }}>
           {REPORT_VIEWS.map(([id, label]) => (
             <button key={id} onClick={() => setView(id)} style={{
-              padding: "7px 16px", border: `1px solid ${view === id ? C.navy : C.line}`,
-              background: view === id ? C.navy : C.panel, color: view === id ? "#fff" : C.sub,
-              fontSize: 12.5, fontWeight: 600, cursor: "pointer",
+              padding: "7px 16px", border: "none", borderRadius: 7,
+              background: view === id ? C.panel : "transparent", color: view === id ? C.ink : C.sub,
+              fontSize: 12.5, fontWeight: view === id ? 700 : 600, cursor: "pointer",
+              boxShadow: view === id ? "0 1px 3px rgba(15,18,34,0.12)" : "none", transition: "all .12s",
             }}>{label}</button>
           ))}
         </div>
@@ -986,9 +993,39 @@ function AgentsTab({ agg, trends }) {
   const { sorted, sortKey, sortDir, toggleSort } = useSort(filtered, "stake", "desc");
   if (agg.agents.length === 0) return <EmptyState />;
   const dash = (v) => v === null || v === undefined ? "—" : naira(v);
+  const totalCommission = agg.agents.reduce((s, a) => s + a.sourceCommission, 0);
+  const avgCommission = agg.agents.length ? totalCommission / agg.agents.length : 0;
+  const topState = agg.states && agg.states[0];
+  const topByCommission = [...agg.agents].sort((a, b) => b.sourceCommission - a.sourceCommission).slice(0, 8);
+  const maxTopCommission = topByCommission[0]?.sourceCommission || 1;
   return (
     <>
-      <h1 style={{ ...serif, fontSize: 28, fontWeight: 500, margin: "0 0 20px" }}>Agent Breakdown</h1>
+      <div style={{ marginBottom: 6 }}>
+        <h1 style={{ ...serif, fontSize: 28, fontWeight: 500, margin: "0 0 4px" }}>Agent Breakdown</h1>
+        <div style={{ fontSize: 13, color: C.sub }}>Every agent with activity this period, ranked by stake — sortable, searchable, exportable.</div>
+      </div>
+
+      <div className="kpi-row" style={{ display: "flex", gap: 14, margin: "16px 0 20px" }}>
+        <Kpi label="Agents with activity" value={agg.agents.length} />
+        <Kpi label="Total commission" value={nairaShort(totalCommission)} />
+        <Kpi label="Avg. commission / agent" value={nairaShort(avgCommission)} />
+        <Kpi label="Top state" value={topState ? topState.state : "—"} />
+      </div>
+
+      <Panel title="Top 8 agents by commission">
+        {topByCommission.map((a, i) => (
+          <div key={a.username} style={{ marginBottom: i === topByCommission.length - 1 ? 0 : 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, marginBottom: 4 }}>
+              <span style={{ ...mono, fontWeight: 600 }}>#{i + 1} {a.username}</span>
+              <span style={{ ...nums, fontWeight: 700 }}>{naira(a.sourceCommission)}</span>
+            </div>
+            <div style={{ background: C.line, height: 6, borderRadius: 3 }}>
+              <div style={{ width: `${Math.max(3, (a.sourceCommission / maxTopCommission) * 100)}%`, background: C.navy, height: 6, borderRadius: 3 }} />
+            </div>
+          </div>
+        ))}
+      </Panel>
+
       <Panel title={`${agg.agents.length} agents with activity`} right={
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, border: `1px solid ${C.line}`, padding: "4px 8px" }}>
@@ -1074,7 +1111,10 @@ function ProductsTab({ agg }) {
   if (agg.products.length === 0) return <EmptyState />;
   return (
     <>
-      <h1 style={{ ...serif, fontSize: 28, fontWeight: 500, margin: "0 0 20px" }}>Product Performance</h1>
+      <div style={{ marginBottom: 20 }}>
+        <h1 style={{ ...serif, fontSize: 28, fontWeight: 500, margin: "0 0 4px" }}>Product Performance</h1>
+        <div style={{ fontSize: 13, color: C.sub }}>How stake, payout, and commission break down across every product uploaded this period.</div>
+      </div>
       <div style={{ display: "flex", gap: 20 }}>
         <Panel title="Share of stake by product" style={{ flex: 1 }}>
           <ResponsiveContainer width="100%" height={240}>
@@ -1152,7 +1192,10 @@ function StatesTab({ agg, trends }) {
   if (agg.states.length === 0) return <EmptyState />;
   return (
     <>
-      <h1 style={{ ...serif, fontSize: 28, fontWeight: 500, margin: "0 0 20px" }}>State Performance</h1>
+      <div style={{ marginBottom: 20 }}>
+        <h1 style={{ ...serif, fontSize: 28, fontWeight: 500, margin: "0 0 4px" }}>State Performance</h1>
+        <div style={{ fontSize: 13, color: C.sub }}>Geographic breakdown of activity — sort any column, export the full table.</div>
+      </div>
       <Panel title="All states — click a column to sort" right={
         <button onClick={() => downloadCSV("robustic_state_breakdown.csv", sorted, [
           { label: "State", get: s => s.state }, { label: "Agents", get: s => s.agentCount },

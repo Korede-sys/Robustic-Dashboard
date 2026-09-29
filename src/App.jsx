@@ -1053,7 +1053,8 @@ function AgentsTab({ agg, trends }) {
         </div>
       }>
         <div style={{ fontSize: 11.5, color: C.sub, marginBottom: 10 }}>
-          Bonus/Palliative/Gift/Avg Stake/Total Earnings are Globalbet-specific — shown as "—" for other products.
+          Bonus/Palliative/Gift/Avg Stake/Total Earnings only come from Globalbet's legacy-format export — not
+          tracked when only the tree-format file is uploaded (confirmed workflow), and always "—" for other products.
           Commission already reflects the confirmed uplift where one applies, so it doesn't need its own separate column.
         </div>
         <div style={{ maxHeight: 560, overflow: "auto" }}>

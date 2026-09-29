@@ -236,12 +236,14 @@ function parseGBFinancialOverview(rows) {
     i++; // consumed the NGN row either way
 
     if (!sawRoot) { sawRoot = true; continue; }
-    // Online agents and cashier sub-accounts are both excluded -- neither is
-    // rolled into anyone else. Any row that isn't itself a recognized agent
-    // (AGENT_USERNAME_RE) is simply skipped, whatever it is: a cashier, an
-    // online account, or an unrecognized format.
-    if (isOnlineUsername(rawUsername)) continue;
-    if (!AGENT_USERNAME_RE.test(rawUsername)) continue;
+    // Online agents now DO count toward stake/payout/profit reporting totals
+    // (confirmed: this makes the app's total match AccessBET's own row
+    // exactly, since that row includes online activity) -- but they still
+    // never get paid: isOnlineUsername no longer skips the row here, relying
+    // instead on the centralized policy in aggregateBatches that forces their
+    // payable commission to zero and excludes them from bonus/palliative/gift,
+    // regardless of what the sheet shows. Stake counts, payment doesn't.
+    if (!AGENT_USERNAME_RE.test(rawUsername) && !isOnlineUsername(rawUsername)) continue;
 
     const tickets = money(get(row, 3)), stake = money(get(nextRow, 5)), payout = money(get(nextRow, 6));
     const profit = money(get(nextRow, 17)), commission = money(get(nextRow, 15));

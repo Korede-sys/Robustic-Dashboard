@@ -1,12 +1,17 @@
-import React, { useState } from "react";
-import { Loader2 } from "lucide-react";
+import React, { useState, useEffect } from "react";
+import { Loader2, Moon, Sun } from "lucide-react";
 import { signIn } from "./lib/dataLayer";
 
 const C = {
-  paper: "#F7F8FA", panel: "#FFFFFF", ink: "#0F1222", sub: "#6B7280", line: "#E6E8EE",
-  emerald: "#067647", brick: "#DC2626", navy: "#4F46E5",
-  railBg: "#F7F8FA", railText: "#4B5165", railTextActive: "#0F1222", stamp: "#4F46E5",
+  paper: "var(--paper, #F7F8FA)", panel: "var(--panel, #FFFFFF)", ink: "var(--ink, #0F1222)", sub: "var(--sub, #6B7280)", line: "var(--line, #E6E8EE)",
+  emerald: "var(--emerald, #067647)", brick: "var(--brick, #DC2626)", navy: "var(--navy, #4F46E5)",
+  railBg: "var(--paper, #F7F8FA)", railText: "var(--sub, #4B5165)", railTextActive: "var(--ink, #0F1222)", stamp: "var(--stamp, #4F46E5)",
 };
+const THEME_VARS = {
+  light: { paper: "#F7F8FA", panel: "#FFFFFF", ink: "#0F1222", sub: "#6B7280", line: "#E6E8EE", emerald: "#067647", brick: "#DC2626", navy: "#4F46E5", stamp: "#4F46E5" },
+  dark: { paper: "#0C0A14", panel: "#161320", ink: "#F1EEFA", sub: "#8B84A3", line: "#292340", emerald: "#34D399", brick: "#F87171", navy: "#8B5CF6", stamp: "#8B5CF6" },
+};
+function themeVarsCSS(vars) { return Object.entries(vars).map(([k, v]) => `--${k}: ${v};`).join(" "); }
 const serif = { fontFamily: "'Plus Jakarta Sans', -apple-system, sans-serif", fontWeight: 800 };
 const sans = { fontFamily: "'Plus Jakarta Sans', -apple-system, sans-serif" };
 
@@ -24,6 +29,12 @@ export default function LoginScreen({ onSignedIn }) {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [themeMode, setThemeMode] = useState(() => {
+    try { return localStorage.getItem("robustic-theme") || "light"; } catch (e) { return "light"; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("robustic-theme", themeMode); } catch (e) { /* non-critical */ }
+  }, [themeMode]);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -40,12 +51,21 @@ export default function LoginScreen({ onSignedIn }) {
   }
 
   return (
-    <div style={{
+    <div data-theme={themeMode} style={{
       minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
-      background: C.railBg, ...sans,
+      background: C.railBg, position: "relative", ...sans,
     }}>
       <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500;600&display=swap" />
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } } .lucide-loader-2 { animation: spin 0.8s linear infinite; }`}</style>
+      <style>{`
+        @keyframes spin { to { transform: rotate(360deg); } } .lucide-loader-2 { animation: spin 0.8s linear infinite; }
+        :root, [data-theme="light"] { ${themeVarsCSS(THEME_VARS.light)} }
+        [data-theme="dark"] { ${themeVarsCSS(THEME_VARS.dark)} }
+      `}</style>
+
+      <button onClick={() => setThemeMode(m => m === "light" ? "dark" : "light")} title={themeMode === "light" ? "Switch to dark mode" : "Switch to light mode"} style={{
+        position: "absolute", top: 24, right: 28, border: `1px solid ${C.line}`, background: C.panel, color: C.sub,
+        cursor: "pointer", padding: 8, borderRadius: 8, display: "flex",
+      }}>{themeMode === "light" ? <Moon size={15} /> : <Sun size={15} />}</button>
 
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 28, position: "absolute", top: 40 }}>
         <RobusticMark />

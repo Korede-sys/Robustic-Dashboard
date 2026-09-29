@@ -6,7 +6,7 @@ import {
   Upload, Download, CheckCircle2, AlertTriangle, ShieldCheck, ShieldAlert,
   FileSpreadsheet, History as HistoryIcon, BookOpen, X, Loader2, Trash2, LayoutGrid,
   Users, Package, MapPin, Search, ArrowUp, ArrowDown, Minus, Phone, ClipboardList, TrendingUp, Check, LogOut, UserCog,
-  Sliders, Activity as ActivityIcon, Eye, ChevronDown,
+  Sliders, Activity as ActivityIcon, Eye, ChevronDown, Moon, Sun,
 } from "lucide-react";
 
 import {
@@ -25,22 +25,42 @@ import {
 import LoginScreen from "./LoginScreen";
 
 /* ============================================================ design tokens */
+// Both palettes as CSS variables so a single data-theme attribute can swap
+// every color at once -- see the <style> block in App() for the variable
+// definitions themselves. C stays a plain object of var() references, so
+// every existing call site (hundreds of them, via C.ink / C.navy / etc.)
+// keeps working unchanged; only the values they resolve to become dynamic.
 const C = {
-  // Light, enterprise-SaaS content area -- off-white page, pure-white cards.
-  paper: "#F7F8FA", panel: "#FFFFFF", ink: "#0F1222", sub: "#6B7280", line: "#E6E8EE",
-  // Semantic states, tuned for a light surface: green for confirmed/positive,
-  // amber for tentative, red for mismatch/danger. Kept under the old names
-  // (emerald/amber/brick) so existing call sites don't all need editing.
-  emerald: "#067647", emeraldSoft: "#ECFDF3", amber: "#B54708", amberSoft: "#FFFAEB",
-  brick: "#DC2626", brickSoft: "#FEF2F2",
-  // "navy" is the primary-action/brand color -- indigo here, the one accent
-  // used sparingly for active states and primary buttons.
-  navy: "#4F46E5",
-  // Sidebar is a distinct white surface with a border, not a colored/dark
-  // rail -- active state reads via a soft indigo fill + indigo text.
-  railBg: "#FFFFFF", railActiveBg: "#EEF0FF", railText: "#4B5165", railTextActive: "#4F46E5",
-  stamp: "#4F46E5", stampSoft: "#EEF0FF",
+  paper: "var(--paper, #F7F8FA)", panel: "var(--panel, #FFFFFF)", ink: "var(--ink, #0F1222)", sub: "var(--sub, #6B7280)", line: "var(--line, #E6E8EE)",
+  emerald: "var(--emerald, #067647)", emeraldSoft: "var(--emerald-soft, #ECFDF3)", amber: "var(--amber, #B54708)", amberSoft: "var(--amber-soft, #FFFAEB)",
+  brick: "var(--brick, #DC2626)", brickSoft: "var(--brick-soft, #FEF2F2)",
+  navy: "var(--navy, #4F46E5)",
+  railBg: "var(--rail-bg, #FFFFFF)", railActiveBg: "var(--rail-active-bg, #EEF0FF)", railText: "var(--rail-text, #4B5165)", railTextActive: "var(--rail-text-active, #4F46E5)",
+  stamp: "var(--stamp, #4F46E5)", stampSoft: "var(--stamp-soft, #EEF0FF)",
 };
+// Light values (also the :root / data-theme="light" defaults) and dark
+// values, defined once here and rendered into the <style> block below --
+// keeps the two palettes next to each other instead of split across a CSS
+// string, so they're easy to compare and keep in sync.
+const THEME_VARS = {
+  light: {
+    paper: "#F7F8FA", panel: "#FFFFFF", ink: "#0F1222", sub: "#6B7280", line: "#E6E8EE",
+    emerald: "#067647", "emerald-soft": "#ECFDF3", amber: "#B54708", "amber-soft": "#FFFAEB",
+    brick: "#DC2626", "brick-soft": "#FEF2F2",
+    navy: "#4F46E5",
+    "rail-bg": "#FFFFFF", "rail-active-bg": "#EEF0FF", "rail-text": "#4B5165", "rail-text-active": "#4F46E5",
+    stamp: "#4F46E5", "stamp-soft": "#EEF0FF",
+  },
+  dark: {
+    paper: "#0C0A14", panel: "#161320", ink: "#F1EEFA", sub: "#8B84A3", line: "#292340",
+    emerald: "#34D399", "emerald-soft": "rgba(52,211,153,0.14)", amber: "#F0B44F", "amber-soft": "rgba(240,180,79,0.14)",
+    brick: "#F87171", "brick-soft": "rgba(248,113,113,0.14)",
+    navy: "#8B5CF6",
+    "rail-bg": "#17131F", "rail-active-bg": "rgba(255,255,255,0.12)", "rail-text": "#EDE9FE", "rail-text-active": "#FFFFFF",
+    stamp: "#8B5CF6", "stamp-soft": "rgba(139,92,246,0.16)",
+  },
+};
+function themeVarsCSS(vars) { return Object.entries(vars).map(([k, v]) => `--${k}: ${v};`).join(" "); }
 const serif = { fontFamily: "'Plus Jakarta Sans', -apple-system, sans-serif", fontWeight: 800 };
 const sans = { fontFamily: "'Plus Jakarta Sans', -apple-system, sans-serif" };
 const mono = { fontFamily: "'IBM Plex Mono', 'SF Mono', Consolas, monospace" };
@@ -160,6 +180,12 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(true);
 
   const [tab, setTab] = useState("reports");
+  const [themeMode, setThemeMode] = useState(() => {
+    try { return localStorage.getItem("robustic-theme") || "light"; } catch (e) { return "light"; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("robustic-theme", themeMode); } catch (e) { /* storage unavailable, non-critical */ }
+  }, [themeMode]);
   const [openNavGroup, setOpenNavGroup] = useState(null);
   const navRef = useRef(null);
   useEffect(() => {
@@ -343,14 +369,16 @@ export default function App() {
   const series = computeBatchSeries(batches);
 
   return (
-    <div style={{ background: C.paper, color: C.ink, minHeight: "100vh", display: "flex", ...sans }}>
+    <div data-theme={themeMode} style={{ background: C.paper, color: C.ink, minHeight: "100vh", display: "flex", ...sans }}>
       <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500;600&display=swap" />
       <style>{`
+        :root, [data-theme="light"] { ${themeVarsCSS(THEME_VARS.light)} }
+        [data-theme="dark"] { ${themeVarsCSS(THEME_VARS.dark)} }
         input, select, textarea {
           background: ${C.panel}; color: ${C.ink}; border-color: ${C.line};
         }
         input::placeholder, textarea::placeholder { color: ${C.sub}; }
-        input:focus, select:focus, textarea:focus { outline: 2px solid ${C.navy}22; border-color: ${C.navy}; }
+        input:focus, select:focus, textarea:focus { outline: 2px solid ${C.stampSoft}; border-color: ${C.navy}; }
         @keyframes spin { to { transform: rotate(360deg); } }
         .lucide-loader-2 { animation: spin 0.8s linear infinite; }
         th {
@@ -408,6 +436,9 @@ export default function App() {
             <div style={{ fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{profile.name}</div>
             <div style={{ fontSize: 10.5, color: C.sub, textTransform: "capitalize" }}>{profile.role}</div>
           </div>
+          <button onClick={() => setThemeMode(m => m === "light" ? "dark" : "light")} title={themeMode === "light" ? "Switch to dark mode" : "Switch to light mode"} style={{
+            border: "none", background: "transparent", color: C.sub, cursor: "pointer", padding: 4, display: "flex", flexShrink: 0,
+          }}>{themeMode === "light" ? <Moon size={15} /> : <Sun size={15} />}</button>
           <button onClick={() => signOut()} title="Sign out" style={{
             border: "none", background: "transparent", color: C.sub, cursor: "pointer", padding: 4, display: "flex", flexShrink: 0,
           }}><LogOut size={15} /></button>

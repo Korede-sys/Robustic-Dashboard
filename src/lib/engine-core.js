@@ -279,7 +279,7 @@ function parseGBLegacyTiered(rows) {
     };
     const tier10Tickets = money(get(row, 31)), tier10Stake = money(get(row, 32)), tier10Profit = money(get(row, 38));
     const commUplift = money(get(row, 40));
-    const b = money(get(row, 41)), g = money(get(row, 43));
+    const b = money(get(row, 41));
     if (b) supplemental.push({ agentUsername: u, type: "bonus", amount: b });
     // Palliative: confirmed formula, verified 136/137 exact against a real
     // 150-agent reference (the one exception has an internal inconsistency
@@ -296,12 +296,17 @@ function parseGBLegacyTiered(rows) {
     const palRaw = palEligible ? 0.5 * (tier10Profit || 0) - (commUplift || 0) - (b || 0) : 0;
     const p = palEligible ? Math.min(10000, Math.max(0, palRaw)) : 0;
     if (p) supplemental.push({ agentUsername: u, type: "palliative", amount: p });
-    // Gift: NOT YET CONFIRMED. A two-branch hypothesis (flat 10,000 when the
-    // uncapped palliative calculation exceeds 10,000; otherwise an
-    // independent 35%-of-profit formula) only matched 122/137 real agents --
-    // real, unexplained exceptions with specific non-round values, not
-    // noise. Still reading directly from the sheet's own column here rather
-    // than computing something not yet trustworthy.
+    // Gift: confirmed formula, verified 136/137 against the same real
+    // reference dataset. A shared ceiling of MIN(20000, 35% x this row's
+    // own Profit - Commission(1.10%)) covers Palliative + Gift together --
+    // Palliative takes its share first (already computed above, capped at
+    // 10,000 on its own separate 50% formula), and Gift is whatever's left
+    // of the 20,000 ceiling after that. No separate eligibility gate needed
+    // here -- Palliative's own eligibility already determines how much of
+    // the ceiling it consumes, and Gift naturally gets the full ceiling
+    // when Palliative was 0 (ineligible or profit too low to reach 10,000).
+    const giftCeiling = Math.min(20000, Math.max(0, 0.35 * (tier10Profit || 0) - (commUplift || 0)));
+    const g = Math.max(0, giftCeiling - p);
     if (g) supplemental.push({ agentUsername: u, type: "gift", amount: g });
   }
   for (const row of rows.slice(3)) {

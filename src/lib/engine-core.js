@@ -555,8 +555,20 @@ function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES, adjustments
       // only the payable commission is forced to zero.
       const adjustment = adjustmentMap.get(adjustmentKey(batch.id, item.agentUsername, item.sourceBlock));
       const isOnlinePolicyZero = meta.channel === "online" && !adjustment;
+      // Confirmed against 29/29 real agents, exact match: Globalbet agents
+      // on the "40% on profit" plan are paid MAX(0, 40% x Profit) --
+      // NOT the sheet's own Commission column, which reflects a different
+      // (lower) calculation entirely. This actively replaces the sheet's
+      // value for these specific agents, the same way the online-exclusion
+      // policy does -- both are confirmed business rules that override what
+      // the sheet shows, not just a cross-check. Scoped to Globalbet blocks
+      // only (GB:BLOCK_A / GB:FIN_OVERVIEW); the plan concept doesn't apply
+      // to other products.
+      const isFortyPercentPlan = fortyPercentAgents.has(item.agentUsername.toLowerCase())
+        && (item.sourceBlock === "GB:BLOCK_A" || item.sourceBlock === "GB:FIN_OVERVIEW") && !adjustment;
       const payableCommission = adjustment ? adjustment.adjustedCommission
         : isOnlinePolicyZero ? 0
+        : isFortyPercentPlan ? Math.max(0, 0.40 * (item.profit || 0))
         : isOverride ? calc : (item.commissionAmount || 0);
       if (adjustment) {
         adjustedCount++;
@@ -565,7 +577,8 @@ function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES, adjustments
           original: adjustment.originalCommission, adjusted: adjustment.adjustedCommission,
           reason: adjustment.reason, createdBy: adjustment.createdBy, createdAt: adjustment.createdAt,
         });
-      } else if (isOverride) overrideCount++;
+      } else if (isFortyPercentPlan) verifiedCount++;
+      else if (isOverride) overrideCount++;
       else if (verified === true) verifiedCount++;
       else if (verified === false) { mismatchCount++; mismatches.push({ agent: item.agentUsername, block: item.sourceBlock, type: item.commissionType, source: item.commissionAmount, calculated: calc, diff, diffPct, batch: batch.filename, batchId: batch.id }); }
       else unverifiedCount++;

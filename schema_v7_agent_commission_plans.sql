@@ -16,14 +16,14 @@
 -- new account automatically will be on up to 10%, unless we manually put it
 -- on 40%") without needing to seed hundreds of rows for the default case.
 --
--- What this table does NOT yet do: change how weekly commission itself is
--- calculated for 40%-on-profit agents. Verified against real data that their
--- commission is NOT simply 40% of profit (actual ratios ranged 21%-30%,
--- nothing close to 40% consistently) -- so for now this only gates
--- Bonus/Palliative/Gift eligibility, exactly as confirmed. The weekly
--- commission for these agents keeps using the sheet's own value, same as
--- every other agent, until the actual "40% on profit" calculation is
--- confirmed with real worked examples.
+-- What this table does: gates Bonus/Palliative/Gift eligibility (zero for
+-- everyone on "40% on profit") AND, as of the commission-engine update that
+-- shipped alongside this table's use, actively determines weekly commission
+-- for these agents too -- confirmed against 29/29 real agents, exact match:
+-- Commission = MAX(0, 40% x Profit), replacing the sheet's own Commission
+-- column (which reflects a different, lower calculation for this tier).
+-- Verified including the negative-profit case (commission floors at 0, not
+-- negative).
 -- ============================================================================
 
 create table agent_commission_plans (

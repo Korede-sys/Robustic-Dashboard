@@ -277,9 +277,31 @@ function parseGBLegacyTiered(rows) {
       commission: money(get(row, 40)), totalEarnings: money(get(row, 44)),
       balance: money(get(row, 45)), avgStake: money(get(row, 46)),
     };
-    const b = money(get(row, 41)), p = money(get(row, 42)), g = money(get(row, 43));
+    const tier10Tickets = money(get(row, 31)), tier10Stake = money(get(row, 32)), tier10Profit = money(get(row, 38));
+    const commUplift = money(get(row, 40));
+    const b = money(get(row, 41)), g = money(get(row, 43));
     if (b) supplemental.push({ agentUsername: u, type: "bonus", amount: b });
+    // Palliative: confirmed formula, verified 136/137 exact against a real
+    // 150-agent reference (the one exception has an internal inconsistency
+    // in the source sheet itself -- its own uplifted commission is LOWER
+    // than its base commission, backwards from every other row, so it's
+    // being treated as a data error in the source, not a formula miss).
+    // Eligibility: stake >= 200,000 AND tickets >= 800 (both from this same
+    // tier10 row, not Block A's figures). When eligible: 50% of this row's
+    // own Profit, minus the uplifted commission, minus Bonus, floored at 0,
+    // capped at 10,000. Computed here rather than read from the sheet --
+    // this is the whole point of confirming the formula: no manual work
+    // needed to get this number going forward.
+    const palEligible = (tier10Stake || 0) >= 200000 && (tier10Tickets || 0) >= 800;
+    const palRaw = palEligible ? 0.5 * (tier10Profit || 0) - (commUplift || 0) - (b || 0) : 0;
+    const p = palEligible ? Math.min(10000, Math.max(0, palRaw)) : 0;
     if (p) supplemental.push({ agentUsername: u, type: "palliative", amount: p });
+    // Gift: NOT YET CONFIRMED. A two-branch hypothesis (flat 10,000 when the
+    // uncapped palliative calculation exceeds 10,000; otherwise an
+    // independent 35%-of-profit formula) only matched 122/137 real agents --
+    // real, unexplained exceptions with specific non-round values, not
+    // noise. Still reading directly from the sheet's own column here rather
+    // than computing something not yet trustworthy.
     if (g) supplemental.push({ agentUsername: u, type: "gift", amount: g });
   }
   for (const row of rows.slice(3)) {

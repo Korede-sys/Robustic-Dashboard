@@ -191,6 +191,36 @@ export async function addCommissionRule(rule, userId) {
   if (error) throw error;
 }
 
+/* ============================================================ agent commission plans */
+function agentPlanFromDb(row, nameById) {
+  return {
+    id: row.id, agentUsername: row.agent_username, plan: row.plan, note: row.note,
+    setBy: (nameById && nameById[row.set_by]) || "—", setAt: row.set_at,
+  };
+}
+export async function loadAgentCommissionPlans() {
+  const [{ data: rows, error }, profiles] = await Promise.all([
+    supabase.from("agent_commission_plans").select("*").order("set_at", { ascending: false }),
+    getAllProfiles(),
+  ]);
+  if (error) throw error;
+  const nameById = {};
+  for (const p of profiles) nameById[p.id] = p.name;
+  return rows.map(r => agentPlanFromDb(r, nameById));
+}
+export async function setAgentCommissionPlan(agentUsername, plan, userId, note) {
+  const { error } = await supabase.from("agent_commission_plans")
+    .upsert({
+      agent_username: agentUsername.toLowerCase(), plan, note: note || null,
+      set_by: userId, set_at: new Date().toISOString(),
+    }, { onConflict: "agent_username" });
+  if (error) throw error;
+}
+export async function removeAgentCommissionPlan(agentUsername) {
+  const { error } = await supabase.from("agent_commission_plans").delete().eq("agent_username", agentUsername.toLowerCase());
+  if (error) throw error;
+}
+
 /* ============================================================ manual adjustments */
 function adjustmentFromDb(row, nameById) {
   return {

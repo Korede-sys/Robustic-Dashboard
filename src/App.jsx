@@ -21,6 +21,7 @@ import {
   loadAllInterventions, saveIntervention, updateInterventionStatus, deleteIntervention,
   loadCommissionRules, updateCommissionRule, addCommissionRule, logActivity, loadActivityLog,
   loadAllAdjustments, addManualAdjustment, deleteManualAdjustment,
+  loadAgentCommissionPlans, setAgentCommissionPlan, removeAgentCommissionPlan,
 } from "./lib/dataLayer";
 import LoginScreen from "./LoginScreen";
 
@@ -204,6 +205,7 @@ export default function App() {
   const [ruleRows, setRuleRows] = useState([]);
   const [activityLog, setActivityLog] = useState([]);
   const [adjustments, setAdjustments] = useState([]);
+  const [agentPlans, setAgentPlans] = useState([]);
   const fileInputRef = useRef(null);
 
   // ---- auth: check session on load, react to sign-in/out ----
@@ -227,7 +229,7 @@ export default function App() {
     if (!session) return;
     (async () => {
       setLoading(true);
-      const [loadedBatches, loadedInterventions, ruleData, loadedActivity, loadedAdjustments] = await Promise.all([
+      const [loadedBatches, loadedInterventions, ruleData, loadedActivity, loadedAdjustments, loadedAgentPlans] = await Promise.all([
         loadAllBatches(),
         can(profile?.role, "manage_followups") ? loadAllInterventions() : Promise.resolve([]),
         // These tables are added by later migrations. If a migration hasn't been
@@ -238,6 +240,7 @@ export default function App() {
         loadCommissionRules().catch(() => ({ rules: {}, rows: [] })),
         loadActivityLog().catch(() => []),
         loadAllAdjustments().catch(() => []),
+        loadAgentCommissionPlans().catch(() => []),
       ]);
       setBatches(loadedBatches);
       setSelectedKeys(new Set(loadedBatches.map(b => b.id)));
@@ -246,12 +249,16 @@ export default function App() {
       setRuleRows(ruleData.rows);
       setActivityLog(loadedActivity);
       setAdjustments(loadedAdjustments);
+      setAgentPlans(loadedAgentPlans);
       setLoading(false);
     })();
   }, [session, profile?.role]);
 
   async function refreshActivity() {
     try { setActivityLog(await loadActivityLog()); } catch (e) { /* non-critical */ }
+  }
+  async function refreshAgentPlans() {
+    try { setAgentPlans(await loadAgentCommissionPlans()); } catch (e) { /* non-critical */ }
   }
   async function refreshAdjustments() {
     try { setAdjustments(await loadAllAdjustments()); } catch (e) { /* non-critical */ }
@@ -273,7 +280,7 @@ export default function App() {
         periodStart: period.periodStart, periodEnd: period.periodEnd, periodConfidence: period.confidence,
       });
     }
-    const agg = aggregateBatches(parsedBatches, rules);
+    const agg = aggregateBatches(parsedBatches, rules, [], new Set(agentPlans.filter(p => p.plan === "forty_percent_profit").map(p => p.agentUsername.toLowerCase())));
     // Per-file, per-block item counts -- the direct way to spot a double-counting
     // bug before it becomes real data: a block with a suspiciously high count
     // relative to the others in the same file is exactly what caught the last one.
@@ -364,7 +371,8 @@ export default function App() {
     group.items.push(item);
   }
   const selectedBatches = batches.filter(b => selectedKeys.has(b.id));
-  const agg = aggregateBatches(selectedBatches, rules, adjustments);
+  const fortyPercentAgents = new Set(agentPlans.filter(p => p.plan === "forty_percent_profit").map(p => p.agentUsername.toLowerCase()));
+  const agg = aggregateBatches(selectedBatches, rules, adjustments, fortyPercentAgents);
   const trends = computeTrends(batches);
   const series = computeBatchSeries(batches);
 
@@ -474,7 +482,7 @@ export default function App() {
             )}
             {tab === "reports" && (
               <ReportsTab batches={batches} selectedKeys={selectedKeys} setSelectedKeys={setSelectedKeys}
-                rules={rules} adjustments={adjustments} trends={trends} series={series} />
+                rules={rules} adjustments={adjustments} trends={trends} series={series} fortyPercentAgents={fortyPercentAgents} />
             )}
             {tab === "lowactivity" && can(profile.role, "manage_followups") && (
               <LowActivityTab agg={agg} trends={trends} onCall={setCallAgent} />
@@ -488,7 +496,8 @@ export default function App() {
             )}
             {tab === "history" && <HistoryTab batches={batches} removeBatch={can(profile.role, "delete_upload") ? removeBatch : null} />}
             {tab === "rules" && can(profile.role, "manage_rules") && (
-              <RulesTab ruleRows={ruleRows} setRuleRows={setRuleRows} setRules={setRules} userId={session.user.id} logActivityFn={logActivity} refreshActivity={refreshActivity} batches={batches} />
+              <RulesTab ruleRows={ruleRows} setRuleRows={setRuleRows} setRules={setRules} userId={session.user.id} logActivityFn={logActivity} refreshActivity={refreshActivity} batches={batches}
+                agentPlans={agentPlans} refreshAgentPlans={refreshAgentPlans} canManagePlans={can(profile.role, "manage_agent_plans")} />
             )}
             {tab === "activity" && <ActivityTab activityLog={activityLog} />}
             {tab === "users" && can(profile.role, "manage_users") && <UsersTab currentUserId={profile.id} refreshActivity={refreshActivity} />}
@@ -777,7 +786,7 @@ const REPORT_VIEWS = [
   ["overview", "Overview"], ["agents", "Agents"], ["products", "Products"], ["states", "States"], ["trends", "Trends"],
 ];
 
-function ReportsTab({ batches, selectedKeys, setSelectedKeys, rules, adjustments, trends, series }) {
+function ReportsTab({ batches, selectedKeys, setSelectedKeys, rules, adjustments, trends, series, fortyPercentAgents }) {
   const [view, setView] = useState("overview");
   const [slicerProducts, setSlicerProducts] = useState(new Set());
   const [slicerStates, setSlicerStates] = useState(new Set());
@@ -788,9 +797,9 @@ function ReportsTab({ batches, selectedKeys, setSelectedKeys, rules, adjustments
   const selectedBatches = batches.filter(b => selectedKeys.has(b.id));
   // Unsliced, date-filtered only -- drives the slicer option lists themselves,
   // so choosing a product doesn't make the other slicer's own options vanish.
-  const dateOnlyAgg = aggregateBatches(selectedBatches, rules, adjustments);
+  const dateOnlyAgg = aggregateBatches(selectedBatches, rules, adjustments, fortyPercentAgents);
   const slicedBatches = filterBatchesForSlicers(selectedBatches, { products: slicerProducts, states: slicerStates, channels: slicerChannels });
-  const agg = aggregateBatches(slicedBatches, rules, adjustments);
+  const agg = aggregateBatches(slicedBatches, rules, adjustments, fortyPercentAgents);
 
   const toggleSetValue = (setter) => (value) => setter(prev => {
     const next = new Set(prev);
@@ -1811,13 +1820,45 @@ const ROLE_DESCRIPTIONS = {
 };
 
 /* ============================================================ Rules (admin only) */
-function RulesTab({ ruleRows, setRuleRows, setRules, userId, logActivityFn, refreshActivity, batches }) {
+function RulesTab({ ruleRows, setRuleRows, setRules, userId, logActivityFn, refreshActivity, batches, agentPlans, refreshAgentPlans, canManagePlans }) {
   const [editing, setEditing] = useState({}); // id -> { rate, override }
   const [saving, setSaving] = useState({});
   const [showAddForm, setShowAddForm] = useState(false);
   const [newRule, setNewRule] = useState({ source_block: "", label: "", basis: "profit", rate: "", override_source: false });
   const [addError, setAddError] = useState(null);
   const [adding, setAdding] = useState(false);
+  const [newPlanAgent, setNewPlanAgent] = useState("");
+  const [newPlanNote, setNewPlanNote] = useState("");
+  const [planSaving, setPlanSaving] = useState(false);
+  const [planError, setPlanError] = useState(null);
+  const [removingPlan, setRemovingPlan] = useState(null);
+
+  async function addFortyPercentPlan() {
+    setPlanError(null);
+    const username = newPlanAgent.trim();
+    if (!username) { setPlanError("Enter an agent username."); return; }
+    setPlanSaving(true);
+    try {
+      await setAgentCommissionPlan(username, "forty_percent_profit", userId, newPlanNote.trim() || null);
+      await logActivityFn("update_rule", `Set ${username} to the "40% on profit" commission plan${newPlanNote.trim() ? ` — ${newPlanNote.trim()}` : ""}`, userId);
+      await refreshAgentPlans();
+      setNewPlanAgent(""); setNewPlanNote("");
+    } catch (e) {
+      setPlanError(e.message || "Couldn't save this plan.");
+    } finally {
+      setPlanSaving(false);
+    }
+  }
+  async function removeFortyPercentPlan(plan) {
+    setRemovingPlan(plan.agentUsername);
+    try {
+      await removeAgentCommissionPlan(plan.agentUsername);
+      await logActivityFn("update_rule", `Reverted ${plan.agentUsername} to the default "Up to 10%" commission plan`, userId);
+      await refreshAgentPlans();
+    } finally {
+      setRemovingPlan(null);
+    }
+  }
 
   // Reference helper: every block currently in the system, and for Type-based
   // blocks, the actual Type strings seen in uploaded data -- so an admin adding
@@ -2013,6 +2054,50 @@ function RulesTab({ ruleRows, setRuleRows, setRules, userId, logActivityFn, refr
             </div>
           );
         })}
+      </Panel>
+
+      <Panel title="Globalbet — Agent Commission Plans" right={
+        <span style={{ fontSize: 11, color: C.sub }}>{agentPlans.length} on "40% on profit"</span>
+      }>
+        <div style={{ fontSize: 12.5, color: C.sub, marginBottom: 14, lineHeight: 1.5 }}>
+          Every agent defaults to "Up to 10%" automatically — no entry needed here for that. Add an agent below only
+          to move them onto "40% on profit," which excludes them from weekly Bonus/Palliative/Gift entirely (confirmed
+          policy). Weekly commission itself is unaffected either way — it always uses the sheet's own value.
+        </div>
+        {canManagePlans && (
+          <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "flex-start" }}>
+            <input value={newPlanAgent} onChange={(e) => setNewPlanAgent(e.target.value)} placeholder="Agent username (e.g. 0321fc-gwa-tonybet7)"
+              style={{ border: `1px solid ${C.line}`, borderRadius: 8, padding: "8px 10px", fontSize: 12.5, flex: 1, minWidth: 220 }} />
+            <input value={newPlanNote} onChange={(e) => setNewPlanNote(e.target.value)} placeholder="Note (optional)"
+              style={{ border: `1px solid ${C.line}`, borderRadius: 8, padding: "8px 10px", fontSize: 12.5, flex: 1, minWidth: 160 }} />
+            <button onClick={addFortyPercentPlan} disabled={planSaving} style={{
+              border: "none", background: C.navy, color: "#fff", borderRadius: 8, padding: "8px 16px", fontSize: 12.5,
+              fontWeight: 600, cursor: planSaving ? "default" : "pointer", opacity: planSaving ? 0.7 : 1, whiteSpace: "nowrap",
+            }}>{planSaving ? <Loader2 size={13} /> : "Set to 40% on profit"}</button>
+          </div>
+        )}
+        {planError && <div style={{ fontSize: 12, color: C.brick, marginBottom: 12 }}>{planError}</div>}
+
+        {agentPlans.length === 0 ? (
+          <div style={{ fontSize: 12.5, color: C.sub }}>No agents on "40% on profit" yet — everyone is on the default plan.</div>
+        ) : (
+          <div style={{ maxHeight: 320, overflowY: "auto" }}>
+            {agentPlans.map((p) => (
+              <div key={p.agentUsername} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: `1px solid ${C.line}` }}>
+                <div>
+                  <span style={{ ...mono, fontWeight: 600, fontSize: 13 }}>{p.agentUsername}</span>
+                  {p.note && <span style={{ fontSize: 11.5, color: C.sub, marginLeft: 8 }}>{p.note}</span>}
+                  <div style={{ fontSize: 10.5, color: C.sub }}>{p.setBy} · {p.setAt ? new Date(p.setAt).toLocaleDateString() : ""}</div>
+                </div>
+                {canManagePlans && (
+                  <button onClick={() => removeFortyPercentPlan(p)} disabled={removingPlan === p.agentUsername} style={{
+                    border: `1px solid ${C.line}`, background: "none", borderRadius: 7, padding: "5px 11px", fontSize: 11.5, cursor: "pointer",
+                  }}>{removingPlan === p.agentUsername ? <Loader2 size={12} /> : "Revert to default"}</button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </Panel>
     </>
   );

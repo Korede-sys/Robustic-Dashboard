@@ -491,7 +491,7 @@ function productOf(block) {
   if (block.startsWith("SP:")) return "Sports";
   return "Other";
 }
-function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES, adjustments = []) {
+function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES, adjustments = [], fortyPercentAgents = new Set()) {
   const agentMap = new Map();
   const productAgg = new Map();
   const stateAgg = new Map();
@@ -576,7 +576,7 @@ function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES, adjustments
           username: item.agentUsername, state: meta.stateName, channel: meta.channel,
           tickets: 0, stake: 0, payout: 0, profit: 0, sourceCommission: 0, calcCommission: 0,
           monthlyBonus: 0, bonus: 0, palliative: 0, gift: 0, products: new Set(), allVerified: true, hasOverride: false, hasAdjustment: false,
-          totalEarnings: null, balance: null, avgStake: null,
+          totalEarnings: null, balance: null, avgStake: null, onFortyPercentPlan: fortyPercentAgents.has(key),
         });
       }
       const a = agentMap.get(key);
@@ -629,6 +629,13 @@ function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES, adjustments
       if (!agentMap.has(key)) continue;
       const a = agentMap.get(key);
       if (a.channel === "online") continue;
+      // Confirmed: agents on the "40% on profit" Globalbet commission plan
+      // get NO Bonus/Palliative/Gift at all -- verified against real data,
+      // zero exceptions. This only gates eligibility for these three;
+      // weekly commission is untouched (confirmed NOT to be a flat 40% of
+      // profit -- real ratios ranged 21%-30%, so it still uses the sheet's
+      // own value like everyone else, pending the actual formula).
+      if (fortyPercentAgents.has(key)) continue;
       const amt = supp.amount || 0;
       a.monthlyBonus += amt;
       if (supp.type === "bonus") a.bonus += amt;

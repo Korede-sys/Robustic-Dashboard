@@ -901,16 +901,12 @@ function ReportsTab({ batches, selectedKeys, setSelectedKeys, rules, adjustments
     <>
       <div style={{ marginBottom: 16 }}>
         <h1 style={{ ...serif, fontSize: 30, fontWeight: 500, margin: "0 0 10px" }}>Reports</h1>
-        <div style={{ display: "inline-flex", gap: 4, background: C.line, padding: 4, borderRadius: 10 }}>
-          {REPORT_VIEWS.map(([id, label]) => (
-            <button key={id} onClick={() => setView(id)} style={{
-              padding: "7px 16px", border: "none", borderRadius: 7,
-              background: view === id ? C.panel : "transparent", color: view === id ? C.ink : C.sub,
-              fontSize: 12.5, fontWeight: view === id ? 700 : 600, cursor: "pointer",
-              boxShadow: view === id ? "0 1px 3px rgba(15,18,34,0.12)" : "none", transition: "all .12s",
-            }}>{label}</button>
-          ))}
-        </div>
+        <select value={view} onChange={(e) => setView(e.target.value)} style={{
+          border: `1px solid ${C.line}`, background: C.panel, color: C.ink, borderRadius: 9,
+          padding: "9px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer", minWidth: 180,
+        }}>
+          {REPORT_VIEWS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+        </select>
       </div>
 
       <ReportFilters batches={batches} selectedKeys={selectedKeys} setSelectedKeys={setSelectedKeys} />
@@ -1019,9 +1015,9 @@ function OverviewTab({ agg, trends, series, hasData }) {
         <ResponsiveContainer width="100%" height={220}>
           <BarChart data={agg.products} layout="vertical" margin={{ left: 20 }}>
             <CartesianGrid stroke={C.line} horizontal={false} />
-            <XAxis type="number" tick={{ fontSize: 11, fill: C.sub }} axisLine={false} tickLine={false} tickFormatter={nairaShort} />
-            <YAxis type="category" dataKey="name" tick={{ fontSize: 12, fill: C.ink }} axisLine={false} tickLine={false} width={130} />
-            <Tooltip formatter={(v) => naira(v)} contentStyle={{ fontSize: 12, border: `1px solid ${C.line}` }} />
+            <XAxis type="number" tick={{ fontSize: 11, fill: C.sub, fontFamily: "'Sora', sans-serif" }} axisLine={false} tickLine={false} tickFormatter={nairaShort} />
+            <YAxis type="category" dataKey="name" tick={{ fontSize: 12, fill: C.ink, fontFamily: "'Sora', sans-serif" }} axisLine={false} tickLine={false} width={130} />
+            <Tooltip formatter={(v) => naira(v)} contentStyle={{ fontSize: 12, border: `1px solid ${C.line}`, fontFamily: "'Sora', sans-serif" }} />
             <Bar dataKey="stake" fill={C.emerald} barSize={16} />
           </BarChart>
         </ResponsiveContainer>
@@ -1034,7 +1030,7 @@ function OverviewTab({ agg, trends, series, hasData }) {
               <Pie data={channels} dataKey="stake" nameKey="channel" innerRadius={38} outerRadius={62} paddingAngle={2}>
                 {channels.map((c) => <Cell key={c.channel} fill={CHANNEL_COLORS[c.channel] || C.sub} />)}
               </Pie>
-              <Tooltip formatter={(v) => naira(v)} contentStyle={{ fontSize: 12, border: `1px solid ${C.line}` }} />
+              <Tooltip formatter={(v) => naira(v)} contentStyle={{ fontSize: 12, border: `1px solid ${C.line}`, fontFamily: "'Sora', sans-serif" }} />
             </PieChart>
           </ResponsiveContainer>
           {channels.map(c => (
@@ -1081,9 +1077,9 @@ function OverviewTab({ agg, trends, series, hasData }) {
           <ResponsiveContainer width="100%" height={220}>
             <LineChart margin={{ left: 4 }}>
               <CartesianGrid stroke={C.line} vertical={false} />
-              <XAxis dataKey="date" type="category" allowDuplicatedCategory={false} tick={{ fontSize: 11, fill: C.sub }} axisLine={{ stroke: C.line }} tickLine={false} />
-              <YAxis tick={{ fontSize: 11, fill: C.sub }} axisLine={false} tickLine={false} tickFormatter={nairaShort} />
-              <Tooltip formatter={(v) => naira(v)} contentStyle={{ fontSize: 12, border: `1px solid ${C.line}` }} />
+              <XAxis dataKey="date" type="category" allowDuplicatedCategory={false} tick={{ fontSize: 11, fill: C.sub, fontFamily: "'Sora', sans-serif" }} axisLine={{ stroke: C.line }} tickLine={false} />
+              <YAxis tick={{ fontSize: 11, fill: C.sub, fontFamily: "'Sora', sans-serif" }} axisLine={false} tickLine={false} tickFormatter={nairaShort} />
+              <Tooltip formatter={(v) => naira(v)} contentStyle={{ fontSize: 12, border: `1px solid ${C.line}`, fontFamily: "'Sora', sans-serif" }} />
               {trendTypes.map((type, i) => (
                 <Line key={type} data={series[type]} dataKey="stake" name={PRODUCT_LABELS[type] || type}
                   type="monotone" stroke={TREND_LINE_COLORS[i % TREND_LINE_COLORS.length]} strokeWidth={2} dot={{ r: 3 }} />
@@ -1317,7 +1313,7 @@ function ProductsTab({ agg }) {
               <Pie data={agg.products} dataKey="stake" nameKey="name" innerRadius={55} outerRadius={85} paddingAngle={2}>
                 {agg.products.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
               </Pie>
-              <Tooltip formatter={(v) => naira(v)} contentStyle={{ fontSize: 12, border: `1px solid ${C.line}` }} />
+              <Tooltip formatter={(v) => naira(v)} contentStyle={{ fontSize: 12, border: `1px solid ${C.line}`, fontFamily: "'Sora', sans-serif" }} />
             </PieChart>
           </ResponsiveContainer>
         </Panel>
@@ -1676,9 +1672,9 @@ function TrendsTab({ series }) {
               <ResponsiveContainer width="100%" height={200}>
                 <LineChart data={data}>
                   <CartesianGrid stroke={C.line} vertical={false} />
-                  <XAxis dataKey="date" tick={{ fontSize: 11, fill: C.sub }} axisLine={{ stroke: C.line }} tickLine={false} />
-                  <YAxis tick={{ fontSize: 11, fill: C.sub }} axisLine={false} tickLine={false} tickFormatter={nairaShort} />
-                  <Tooltip formatter={(v) => naira(v)} labelFormatter={(l, p) => p && p[0] ? p[0].payload.filename : l} contentStyle={{ fontSize: 12, border: `1px solid ${C.line}` }} />
+                  <XAxis dataKey="date" tick={{ fontSize: 11, fill: C.sub, fontFamily: "'Sora', sans-serif" }} axisLine={{ stroke: C.line }} tickLine={false} />
+                  <YAxis tick={{ fontSize: 11, fill: C.sub, fontFamily: "'Sora', sans-serif" }} axisLine={false} tickLine={false} tickFormatter={nairaShort} />
+                  <Tooltip formatter={(v) => naira(v)} labelFormatter={(l, p) => p && p[0] ? p[0].payload.filename : l} contentStyle={{ fontSize: 12, border: `1px solid ${C.line}`, fontFamily: "'Sora', sans-serif" }} />
                   <Line type="monotone" dataKey={metric} stroke={metric === "profit" ? C.navy : C.emerald} strokeWidth={2} dot={{ r: 3 }} />
                 </LineChart>
               </ResponsiveContainer>

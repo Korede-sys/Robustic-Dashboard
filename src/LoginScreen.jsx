@@ -9,7 +9,7 @@ const C = {
 };
 const THEME_VARS = {
   light: { paper: "#F7F8FA", panel: "#FFFFFF", ink: "#0F1222", sub: "#6B7280", line: "#E6E8EE", emerald: "#067647", brick: "#DC2626", navy: "#4F46E5", stamp: "#4F46E5" },
-  dark: { paper: "#0C0A14", panel: "#161320", ink: "#F1EEFA", sub: "#8B84A3", line: "#292340", emerald: "#34D399", brick: "#F87171", navy: "#8B5CF6", stamp: "#8B5CF6" },
+  dark: { paper: "#120F0A", panel: "#1C1812", ink: "#F2EDE0", sub: "#9C9484", line: "#2E2A1F", emerald: "#34D399", brick: "#F87171", navy: "#F2C230", stamp: "#F2C230" },
 };
 function themeVarsCSS(vars) { return Object.entries(vars).map(([k, v]) => `--${k}: ${v};`).join(" "); }
 const serif = { fontFamily: "'Plus Jakarta Sans', -apple-system, sans-serif", fontWeight: 800 };
@@ -19,7 +19,7 @@ function RobusticMark({ size = 40 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 34 34">
       <rect x="1" y="1" width="32" height="32" rx="9" fill={C.stamp} />
-      <text x="17" y="22.5" textAnchor="middle" fontFamily="'Plus Jakarta Sans', sans-serif" fontSize="14" fontWeight="800" fill="#fff">R</text>
+      <text x="17" y="22.5" textAnchor="middle" fontFamily="'Plus Jakarta Sans', sans-serif" fontSize="14" fontWeight="800" fill="#17130F">A</text>
     </svg>
   );
 }
@@ -69,14 +69,17 @@ export default function LoginScreen({ onSignedIn }) {
 
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 28, position: "absolute", top: 40 }}>
         <RobusticMark />
-        <div style={{ ...serif, fontSize: 20, fontWeight: 600, color: C.railTextActive }}>Robustic</div>
+        <div style={{ display: "flex", flexDirection: "column", lineHeight: 1.25 }}>
+          <div style={{ ...serif, fontSize: 18, fontWeight: 600, color: C.railTextActive }}>AccessBet</div>
+          <div style={{ fontSize: 11.5, color: C.railText }}>BDO Reporting</div>
+        </div>
       </div>
 
       <form onSubmit={handleSubmit} style={{
         background: C.panel, border: `1px solid ${C.line}`, padding: "38px 34px", width: 368, boxShadow: "0 12px 32px rgba(15,18,34,0.08)", borderRadius: 12,
       }}>
         <div style={{ ...serif, fontSize: 20, marginBottom: 3, color: C.ink }}>Sign in</div>
-        <div style={{ fontSize: 12.5, color: C.sub, marginBottom: 28 }}>Sales &amp; Commission Reporting</div>
+        <div style={{ fontSize: 12.5, color: C.sub, marginBottom: 28 }}>BDO Reporting</div>
 
         <label style={{ display: "block", fontSize: 12, color: C.sub, marginBottom: 5 }}>Email</label>
         <input

@@ -53,12 +53,16 @@ const THEME_VARS = {
     stamp: "#4F46E5", "stamp-soft": "#EEF0FF",
   },
   dark: {
-    paper: "#0C0A14", panel: "#161320", ink: "#F1EEFA", sub: "#8B84A3", line: "#292340",
-    emerald: "#34D399", "emerald-soft": "rgba(52,211,153,0.14)", amber: "#F0B44F", "amber-soft": "rgba(240,180,79,0.14)",
+    // AccessBet palette (confirmed design reference): warm near-black, not a
+    // cool/neutral black -- gold-yellow is the one bold brand/action color,
+    // so the pre-existing warning-amber was shifted to orange to keep the
+    // two visually distinct instead of nearly identical.
+    paper: "#120F0A", panel: "#1C1812", ink: "#F2EDE0", sub: "#9C9484", line: "#2E2A1F",
+    emerald: "#34D399", "emerald-soft": "rgba(52,211,153,0.14)", amber: "#FB923C", "amber-soft": "rgba(251,146,60,0.14)",
     brick: "#F87171", "brick-soft": "rgba(248,113,113,0.14)",
-    navy: "#8B5CF6",
-    "rail-bg": "#17131F", "rail-active-bg": "rgba(255,255,255,0.12)", "rail-text": "#EDE9FE", "rail-text-active": "#FFFFFF",
-    stamp: "#8B5CF6", "stamp-soft": "rgba(139,92,246,0.16)",
+    navy: "#F2C230",
+    "rail-bg": "#120F0A", "rail-active-bg": "#F2C230", "rail-text": "#B8B0A0", "rail-text-active": "#17130F",
+    stamp: "#F2C230", "stamp-soft": "rgba(242,194,48,0.16)",
   },
 };
 function themeVarsCSS(vars) { return Object.entries(vars).map(([k, v]) => `--${k}: ${v};`).join(" "); }
@@ -163,16 +167,16 @@ function downloadCSV(filename, rows, columns) {
 
 /* ============================================================ UI shell */
 const ALL_NAV = [
-  { id: "upload", label: "Upload & Process", icon: Upload, action: "upload", section: "Work" },
-  { id: "reports", label: "Reports", icon: LayoutGrid, action: "view_reports", section: "Reporting" },
+  { id: "reports", label: "Reports", icon: LayoutGrid, action: "view_reports", section: "Overview" },
+  { id: "upload", label: "Upload & Process", icon: Upload, action: "upload", section: "Operations" },
   { id: "lowactivity", label: "Needs Attention", icon: AlertTriangle, action: "manage_followups", section: "Operations" },
   { id: "followups", label: "Follow-ups", icon: ClipboardList, action: "manage_followups", section: "Operations" },
-  { id: "export", label: "Clean Export", icon: Download, action: "export", section: "Operations" },
   { id: "history", label: "History", icon: HistoryIcon, action: "view_reports", section: "Operations" },
-  { id: "rules", label: "Rules", icon: Sliders, action: "manage_rules", section: "Admin" },
+  { id: "export", label: "Clean Export", icon: Download, action: "export", section: "Finance" },
+  { id: "rules", label: "Payout Rules", icon: Sliders, action: "manage_rules", section: "Finance" },
+  { id: "formulas", label: "Formulas", icon: BookOpen, action: "view_reports", section: "Finance" },
   { id: "activity", label: "Activity", icon: ActivityIcon, action: "view_reports", section: "Admin" },
   { id: "users", label: "Team", icon: UserCog, action: "manage_users", section: "Admin" },
-  { id: "formulas", label: "Formulas", icon: BookOpen, action: "view_reports", section: "Reference" },
 ];
 
 export default function App() {
@@ -187,13 +191,12 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem("robustic-theme", themeMode); } catch (e) { /* storage unavailable, non-critical */ }
   }, [themeMode]);
-  const [openNavGroup, setOpenNavGroup] = useState(null);
-  const navRef = useRef(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try { return localStorage.getItem("robustic-sidebar-collapsed") === "1"; } catch (e) { return false; }
+  });
   useEffect(() => {
-    function onClickOutside(e) { if (navRef.current && !navRef.current.contains(e.target)) setOpenNavGroup(null); }
-    document.addEventListener("mousedown", onClickOutside);
-    return () => document.removeEventListener("mousedown", onClickOutside);
-  }, []);
+    try { localStorage.setItem("robustic-sidebar-collapsed", sidebarCollapsed ? "1" : "0"); } catch (e) { /* non-critical */ }
+  }, [sidebarCollapsed]);
   const [batches, setBatches] = useState([]);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
@@ -403,42 +406,56 @@ export default function App() {
           .app-sidebar { width: 72px !important; }
           .app-sidebar .nav-label-text, .app-sidebar .nav-section-label, .app-sidebar .nav-user-detail { display: none !important; }
         }
+        .sidebar-collapsed .nav-label-text, .sidebar-collapsed .nav-section-label, .sidebar-collapsed .nav-user-detail { display: none !important; }
         @media (max-width: 640px) {
           .kpi-row { flex-wrap: wrap !important; }
           .kpi-row > div { min-width: calc(50% - 7px) !important; flex: none !important; }
         }
       `}</style>
 
-      <nav aria-label="Main" className="app-sidebar" style={{
-        width: 236, flexShrink: 0, background: C.railBg, borderRight: `1px solid ${C.line}`,
+      <nav aria-label="Main" className={`app-sidebar${sidebarCollapsed ? " sidebar-collapsed" : ""}`} style={{
+        width: sidebarCollapsed ? 72 : 236, flexShrink: 0, background: C.railBg, borderRight: `1px solid ${C.line}`,
         display: "flex", flexDirection: "column", padding: "20px 14px", boxSizing: "border-box", height: "100vh",
-        position: "sticky", top: 0, overflowY: "auto",
+        position: "sticky", top: 0, overflowY: "auto", transition: "width .16s ease",
       }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "4px 10px 24px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "4px 10px 24px", justifyContent: sidebarCollapsed ? "center" : "flex-start" }}>
           <RobusticMark />
-          <span className="nav-label-text" style={{ ...serif, fontSize: 16, color: C.ink, letterSpacing: -0.3 }}>Robustic</span>
+          <div className="nav-label-text" style={{ display: "flex", flexDirection: "column", lineHeight: 1.25 }}>
+            <span style={{ ...serif, fontSize: 15, color: C.ink, letterSpacing: -0.3 }}>AccessBet</span>
+            <span style={{ fontSize: 11, color: C.sub, fontWeight: 500 }}>BDO Reporting</span>
+          </div>
         </div>
         <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 16 }}>
           {NAV_SECTIONS.map((group) => (
             <div key={group.section}>
-              <div className="nav-section-label" style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 0.6, color: "#A2A6B5", padding: "0 10px 6px", textTransform: "uppercase" }}>
+              <div className="nav-section-label" style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 0.6, color: C.sub, padding: "0 10px 6px", textTransform: "uppercase" }}>
                 {group.section}
               </div>
               {group.items.map((n) => {
                 const Icon = n.icon; const active = tab === n.id;
                 return (
                   <button key={n.id} onClick={() => setTab(n.id)} title={n.label} style={{
-                    display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "9px 12px",
-                    border: "none", background: active ? C.railActiveBg : "transparent",
+                    display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "9px 12px 9px 9px",
+                    border: "none", borderLeft: active ? `3px solid ${C.brick}` : "3px solid transparent",
+                    background: active ? C.railActiveBg : "transparent",
                     color: active ? C.railTextActive : C.railText, borderRadius: 8, cursor: "pointer",
                     fontSize: 13.5, fontWeight: active ? 700 : 500, textAlign: "left", marginBottom: 2,
+                    justifyContent: sidebarCollapsed ? "center" : "flex-start",
                   }}><Icon size={15} strokeWidth={2.2} style={{ flexShrink: 0 }} /><span className="nav-label-text">{n.label}</span></button>
                 );
               })}
             </div>
           ))}
         </div>
-        <div style={{ paddingTop: 12, borderTop: `1px solid ${C.line}`, display: "flex", alignItems: "center", gap: 9 }}>
+        <button onClick={() => setSidebarCollapsed(v => !v)} title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"} style={{
+          border: "none", background: "transparent", color: C.sub, cursor: "pointer", padding: "6px 4px",
+          display: "flex", alignItems: "center", justifyContent: sidebarCollapsed ? "center" : "flex-start", gap: 8,
+          fontSize: 12, marginBottom: 8,
+        }}>
+          <ChevronDown size={14} style={{ transform: sidebarCollapsed ? "rotate(-90deg)" : "rotate(90deg)", flexShrink: 0 }} />
+          <span className="nav-label-text">Collapse</span>
+        </button>
+        <div style={{ paddingTop: 12, borderTop: `1px solid ${C.line}`, display: "flex", alignItems: "center", gap: 9, justifyContent: sidebarCollapsed ? "center" : "flex-start" }}>
           <div style={{
             width: 28, height: 28, borderRadius: 999, background: C.stamp, display: "flex",
             alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, color: "#fff", flexShrink: 0,
@@ -447,13 +464,23 @@ export default function App() {
             <div style={{ fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{profile.name}</div>
             <div style={{ fontSize: 10.5, color: C.sub, textTransform: "capitalize" }}>{profile.role}</div>
           </div>
-          <button onClick={() => setThemeMode(m => m === "light" ? "dark" : "light")} title={themeMode === "light" ? "Switch to dark mode" : "Switch to light mode"} style={{
+          <button onClick={() => setThemeMode(m => m === "light" ? "dark" : "light")} title={themeMode === "light" ? "Switch to dark mode" : "Switch to light mode"} className="nav-label-text" style={{
             border: "none", background: "transparent", color: C.sub, cursor: "pointer", padding: 4, display: "flex", flexShrink: 0,
           }}>{themeMode === "light" ? <Moon size={15} /> : <Sun size={15} />}</button>
-          <button onClick={() => signOut()} title="Sign out" style={{
+          <button onClick={() => signOut()} title="Sign out" className="nav-label-text" style={{
             border: "none", background: "transparent", color: C.sub, cursor: "pointer", padding: 4, display: "flex", flexShrink: 0,
           }}><LogOut size={15} /></button>
         </div>
+        {sidebarCollapsed && (
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, paddingTop: 8 }}>
+            <button onClick={() => setThemeMode(m => m === "light" ? "dark" : "light")} title={themeMode === "light" ? "Switch to dark mode" : "Switch to light mode"} style={{
+              border: "none", background: "transparent", color: C.sub, cursor: "pointer", padding: 4, display: "flex",
+            }}>{themeMode === "light" ? <Moon size={15} /> : <Sun size={15} />}</button>
+            <button onClick={() => signOut()} title="Sign out" style={{
+              border: "none", background: "transparent", color: C.sub, cursor: "pointer", padding: 4, display: "flex",
+            }}><LogOut size={15} /></button>
+          </div>
+        )}
       </nav>
 
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
@@ -515,14 +542,14 @@ export default function App() {
 }
 
 function RobusticMark() {
-  // A stamp/ticket-perforation ring with an "R" monogram -- the one bold accent
-  // color (rust stamp-red) used here as the brand mark, matching its only other
-  // use: verification states, since a stamp is literally what this app produces.
+  // Solid gold-yellow rounded square with a bold black "A" -- matches the
+  // AccessBet brand mark directly (confirmed design reference), not an
+  // abstraction of it. Kept the function name to avoid a larger rename
+  // across every call site for a purely cosmetic change.
   return (
     <svg width="34" height="34" viewBox="0 0 34 34" style={{ flexShrink: 0 }}>
-      <circle cx="17" cy="17" r="15.5" fill="none" stroke={C.stamp} strokeWidth="1.4" strokeDasharray="1.6 2.4" />
-      <circle cx="17" cy="17" r="11.5" fill="none" stroke={C.railTextActive} strokeWidth="0.75" opacity="0.45" />
-      <text x="17" y="22.5" textAnchor="middle" fontFamily="Fraunces, Georgia, serif" fontSize="14" fontWeight="600" fill={C.railTextActive}>R</text>
+      <rect x="0" y="0" width="34" height="34" rx="8" fill={C.stamp} />
+      <text x="17" y="23.5" textAnchor="middle" fontFamily="'Plus Jakarta Sans', sans-serif" fontSize="17" fontWeight="800" fill="#17130F">A</text>
     </svg>
   );
 }
@@ -766,22 +793,48 @@ const TREND_LINE_COLORS = [C.emerald, C.amber, C.brick, C.navy, C.sub];
 
 /* ============================================================ Reports (consolidated: Overview/Agents/Products/States/Trends) */
 function SlicerGroup({ label, options, selected, onToggle, labels }) {
+  const [search, setSearch] = useState("");
   if (!options || options.length === 0) return null;
+  const display = (o) => (labels && labels[o]) || o;
+  const filtered = search ? options.filter(o => display(o).toLowerCase().includes(search.toLowerCase())) : options;
   return (
-    <div>
-      <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".05em", color: C.sub, textTransform: "uppercase", marginBottom: 6 }}>{label}</div>
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", maxWidth: 340 }}>
-        {options.map(opt => {
+    <div style={{ minWidth: 180 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+        <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".05em", color: C.sub, textTransform: "uppercase" }}>{label}</div>
+        {selected.size > 0 && (
+          <span style={{ fontSize: 10, fontWeight: 700, color: C.navy, background: C.stampSoft, borderRadius: 999, padding: "1px 7px" }}>{selected.size}</span>
+        )}
+      </div>
+      {options.length > 6 && (
+        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={`Search ${label.toLowerCase()}…`}
+          style={{ width: "100%", border: `1px solid ${C.line}`, borderRadius: 6, padding: "5px 8px", fontSize: 11.5, marginBottom: 6, boxSizing: "border-box" }} />
+      )}
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", maxWidth: 320, maxHeight: options.length > 10 ? 110 : "none", overflowY: options.length > 10 ? "auto" : "visible" }}>
+        {filtered.length === 0 && <span style={{ fontSize: 11.5, color: C.sub }}>No matches</span>}
+        {filtered.map(opt => {
           const on = selected.has(opt);
           return (
             <button key={opt} onClick={() => onToggle(opt)} style={{
-              padding: "4px 10px", border: `1px solid ${on ? C.emerald : C.line}`, background: on ? C.emeraldSoft : "transparent",
+              padding: "4px 10px", borderRadius: 6, border: `1px solid ${on ? C.emerald : C.line}`, background: on ? C.emeraldSoft : "transparent",
               color: on ? C.emerald : C.sub, fontSize: 11.5, cursor: "pointer",
-            }}>{(labels && labels[opt]) || opt}</button>
+            }}>{display(opt)}</button>
           );
         })}
       </div>
     </div>
+  );
+}
+function SummaryChip({ children, onRemove }) {
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, fontWeight: 600, color: C.navy,
+      background: C.stampSoft, borderRadius: 999, padding: "4px 6px 4px 11px",
+    }}>
+      {children}
+      <button onClick={onRemove} style={{ border: "none", background: "none", color: C.navy, cursor: "pointer", display: "flex", padding: 2, opacity: 0.7 }}>
+        <X size={11} />
+      </button>
+    </span>
   );
 }
 
@@ -794,6 +847,7 @@ function ReportsTab({ batches, selectedKeys, setSelectedKeys, rules, adjustments
   const [slicerProducts, setSlicerProducts] = useState(new Set());
   const [slicerStates, setSlicerStates] = useState(new Set());
   const [slicerChannels, setSlicerChannels] = useState(new Set());
+  const [filtersExpanded, setFiltersExpanded] = useState(true);
 
   if (batches.length === 0) return <EmptyState />;
 
@@ -809,6 +863,7 @@ function ReportsTab({ batches, selectedKeys, setSelectedKeys, rules, adjustments
     next.has(value) ? next.delete(value) : next.add(value);
     return next;
   });
+  const clearAllFilters = () => { setSlicerProducts(new Set()); setSlicerStates(new Set()); setSlicerChannels(new Set()); };
   const activeSlicerCount = slicerProducts.size + slicerStates.size + slicerChannels.size;
 
   return (
@@ -830,19 +885,40 @@ function ReportsTab({ batches, selectedKeys, setSelectedKeys, rules, adjustments
       <ReportFilters batches={batches} selectedKeys={selectedKeys} setSelectedKeys={setSelectedKeys} />
 
       <Panel>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: activeSlicerCount ? 12 : 0 }}>
-          <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: filtersExpanded ? 14 : (activeSlicerCount > 0 ? 10 : 0) }}>
+          <button onClick={() => setFiltersExpanded(v => !v)} style={{
+            display: "flex", alignItems: "center", gap: 7, border: "none", background: "none", cursor: "pointer",
+            padding: 0, fontSize: 13, fontWeight: 700, color: C.ink,
+          }}>
+            <ChevronDown size={14} style={{ transform: filtersExpanded ? "none" : "rotate(-90deg)", transition: "transform .12s", color: C.sub }} />
+            Filters
+            {activeSlicerCount > 0 && (
+              <span style={{ fontSize: 10, fontWeight: 700, color: C.navy, background: C.stampSoft, borderRadius: 999, padding: "1px 7px" }}>{activeSlicerCount}</span>
+            )}
+          </button>
+          {activeSlicerCount > 0 && (
+            <button onClick={clearAllFilters}
+              style={{ border: "none", background: "none", color: C.sub, fontSize: 11.5, cursor: "pointer", textDecoration: "underline", whiteSpace: "nowrap" }}>
+              Clear filters
+            </button>
+          )}
+        </div>
+
+        {!filtersExpanded && activeSlicerCount > 0 && (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {[...slicerProducts].map(v => <SummaryChip key={"p" + v} onRemove={() => toggleSetValue(setSlicerProducts)(v)}>{v}</SummaryChip>)}
+            {[...slicerStates].map(v => <SummaryChip key={"s" + v} onRemove={() => toggleSetValue(setSlicerStates)(v)}>{v}</SummaryChip>)}
+            {[...slicerChannels].map(v => <SummaryChip key={"c" + v} onRemove={() => toggleSetValue(setSlicerChannels)(v)}>{CHANNEL_LABELS[v] || v}</SummaryChip>)}
+          </div>
+        )}
+
+        {filtersExpanded && (
+          <div style={{ display: "flex", gap: 28, flexWrap: "wrap" }}>
             <SlicerGroup label="Product" options={dateOnlyAgg.products.map(p => p.name)} selected={slicerProducts} onToggle={toggleSetValue(setSlicerProducts)} />
             <SlicerGroup label="State" options={dateOnlyAgg.states.map(s => s.state)} selected={slicerStates} onToggle={toggleSetValue(setSlicerStates)} />
             <SlicerGroup label="Channel" options={Object.keys(CHANNEL_LABELS)} labels={CHANNEL_LABELS} selected={slicerChannels} onToggle={toggleSetValue(setSlicerChannels)} />
           </div>
-          {activeSlicerCount > 0 && (
-            <button onClick={() => { setSlicerProducts(new Set()); setSlicerStates(new Set()); setSlicerChannels(new Set()); }}
-              style={{ border: "none", background: "none", color: C.sub, fontSize: 11.5, cursor: "pointer", textDecoration: "underline", whiteSpace: "nowrap" }}>
-              Clear filters ({activeSlicerCount})
-            </button>
-          )}
-        </div>
+        )}
       </Panel>
 
       {view === "overview" && <OverviewTab agg={agg} trends={trends} series={series} hasData={true} />}

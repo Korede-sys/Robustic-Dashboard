@@ -67,8 +67,8 @@ const THEME_VARS = {
   },
 };
 function themeVarsCSS(vars) { return Object.entries(vars).map(([k, v]) => `--${k}: ${v};`).join(" "); }
-const serif = { fontFamily: "'Inter', -apple-system, sans-serif", fontWeight: 800 };
-const sans = { fontFamily: "'Inter', -apple-system, sans-serif" };
+const serif = { fontFamily: "'Sora', -apple-system, sans-serif", fontWeight: 800 };
+const sans = { fontFamily: "'Sora', -apple-system, sans-serif" };
 const mono = { fontFamily: "'IBM Plex Mono', 'SF Mono', Consolas, monospace" };
 const nums = { fontVariantNumeric: "tabular-nums" };
 
@@ -401,7 +401,7 @@ export default function App() {
 
   return (
     <div data-theme={themeMode} style={{ background: C.paper, color: C.ink, minHeight: "100vh", display: "flex", ...sans }}>
-      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500;600&display=swap" />
+      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500;600&display=swap" />
       <style>{`
         :root, [data-theme="light"] { ${themeVarsCSS(THEME_VARS.light)} }
         [data-theme="dark"] { ${themeVarsCSS(THEME_VARS.dark)} }
@@ -580,7 +580,7 @@ function RobusticMark() {
   return (
     <svg width="34" height="34" viewBox="0 0 34 34" style={{ flexShrink: 0 }}>
       <rect x="0" y="0" width="34" height="34" rx="8" fill={C.stamp} />
-      <text x="17" y="23.5" textAnchor="middle" fontFamily="'Inter', sans-serif" fontSize="17" fontWeight="800" fill="#17130F">A</text>
+      <text x="17" y="23.5" textAnchor="middle" fontFamily="'Sora', sans-serif" fontSize="17" fontWeight="800" fill="#17130F">A</text>
     </svg>
   );
 }
@@ -1501,17 +1501,18 @@ function LowActivityTab({ agg, trends, onCall }) {
 }
 
 function ShopGroupsTab({ batches, selectedKeys, setSelectedKeys, rules, fortyPercentAgents, noSupplementalAgents }) {
-  const [view, setView] = useState("tonybetjosh");
+  const [view, setView] = useState("tonybet");
   const selectedBatches = batches.filter(b => selectedKeys.has(b.id));
   const agg = aggregateBatches(selectedBatches, rules, [], fortyPercentAgents, noSupplementalAgents);
   if (agg.agents.length === 0) return <EmptyState />;
 
-  // Confirmed scope: specifically tonybet*/josh*-named shops (by username,
-  // not by commission plan) for one group, and company shops (001-prefix,
-  // already classified via channel==="company_shop") for the other --
-  // these are two different groupings, not the same list sliced two ways.
-  const matching = view === "tonybetjosh"
-    ? agg.agents.filter(a => /tonybet|josh/i.test(a.username))
+  // Confirmed: tonybet and josh stay as two SEPARATE totals -- not merged
+  // into one combined row, even though they're matched the same way (by
+  // username, not by commission plan). Company shops (001-prefix, via the
+  // existing channel==="company_shop" classification) is its own third,
+  // independent group.
+  const matching = view === "tonybet" ? agg.agents.filter(a => /tonybet/i.test(a.username))
+    : view === "josh" ? agg.agents.filter(a => /josh/i.test(a.username))
     : agg.agents.filter(a => a.channel === "company_shop");
 
   const totals = matching.reduce((acc, a) => ({
@@ -1530,7 +1531,7 @@ function ShopGroupsTab({ batches, selectedKeys, setSelectedKeys, rules, fortyPer
       <ReportFilters batches={batches} selectedKeys={selectedKeys} setSelectedKeys={setSelectedKeys} />
 
       <div style={{ display: "inline-flex", gap: 4, background: C.line, padding: 4, borderRadius: 10, marginBottom: 20 }}>
-        {[["tonybetjosh", "Tonybet & Josh"], ["companyshop", "Company Shops (001)"]].map(([id, label]) => (
+        {[["tonybet", "Tonybet"], ["josh", "Josh"], ["companyshop", "Company Shops (001)"]].map(([id, label]) => (
           <button key={id} onClick={() => setView(id)} style={{
             padding: "7px 16px", border: "none", borderRadius: 7,
             background: view === id ? C.panel : "transparent", color: view === id ? C.ink : C.sub,

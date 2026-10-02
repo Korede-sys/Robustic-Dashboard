@@ -12,14 +12,14 @@ const THEME_VARS = {
   dark: { paper: "#120F0A", panel: "#1C1812", ink: "#F2EDE0", sub: "#9C9484", line: "#2E2A1F", emerald: "#34D399", brick: "#F87171", navy: "#F2C230", stamp: "#F2C230" },
 };
 function themeVarsCSS(vars) { return Object.entries(vars).map(([k, v]) => `--${k}: ${v};`).join(" "); }
-const serif = { fontFamily: "'Plus Jakarta Sans', -apple-system, sans-serif", fontWeight: 800 };
-const sans = { fontFamily: "'Plus Jakarta Sans', -apple-system, sans-serif" };
+const serif = { fontFamily: "'Sora', -apple-system, sans-serif", fontWeight: 800 };
+const sans = { fontFamily: "'Sora', -apple-system, sans-serif" };
 
 function RobusticMark({ size = 40 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 34 34">
       <rect x="1" y="1" width="32" height="32" rx="9" fill={C.stamp} />
-      <text x="17" y="22.5" textAnchor="middle" fontFamily="'Plus Jakarta Sans', sans-serif" fontSize="14" fontWeight="800" fill="#17130F">A</text>
+      <text x="17" y="22.5" textAnchor="middle" fontFamily="'Sora', sans-serif" fontSize="14" fontWeight="800" fill="#17130F">A</text>
     </svg>
   );
 }
@@ -55,7 +55,7 @@ export default function LoginScreen({ onSignedIn }) {
       minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
       background: C.railBg, position: "relative", ...sans,
     }}>
-      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500;600&display=swap" />
+      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500;600&display=swap" />
       <style>{`
         @keyframes spin { to { transform: rotate(360deg); } } .lucide-loader-2 { animation: spin 0.8s linear infinite; }
         :root, [data-theme="light"] { ${themeVarsCSS(THEME_VARS.light)} }

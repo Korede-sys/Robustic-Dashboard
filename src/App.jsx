@@ -102,6 +102,13 @@ function toISODateLocal(d) { return `${d.getFullYear()}-${String(d.getMonth() + 
 function addDaysISO(iso, n) { const d = new Date(iso + "T00:00:00"); d.setDate(d.getDate() + n); return toISODateLocal(d); }
 function startOfMonthISO(iso) { const d = new Date(iso + "T00:00:00"); return toISODateLocal(new Date(d.getFullYear(), d.getMonth(), 1)); }
 function startOfWeekISO(iso) { const d = new Date(iso + "T00:00:00"); const dow = d.getDay(); const diff = dow === 0 ? 6 : dow - 1; return addDaysISO(iso, -diff); } // week starts Monday
+function monthRange(yyyyMM) { // "2026-09" -> { start: "2026-09-01", end: "2026-09-30" }
+  const [y, m] = yyyyMM.split("-").map(Number);
+  const start = `${y}-${String(m).padStart(2, "0")}-01`;
+  const end = toISODateLocal(new Date(y, m, 0)); // day 0 of next month = last day of this month
+  return { start, end };
+}
+function yearRange(yyyy) { return { start: `${yyyy}-01-01`, end: `${yyyy}-12-31` }; }
 
 const DATE_PRESETS = [
   { id: "all", label: "All time", range: () => null },
@@ -596,27 +603,43 @@ function FullScreenMessage({ children }) {
   );
 }
 function ReportFilters({ batches, selectedKeys, setSelectedKeys }) {
-  const [preset, setPreset] = useState("all");
+  const [granularity, setGranularity] = useState("week");
+  const [showFiles, setShowFiles] = useState(false);
+
+  // Weekly: pick one of the actual uploaded periods, not a generic date
+  // range -- Robustic's "weeks" ARE the uploaded batches, so a dropdown of
+  // what's really there is more honest than a rolling "last 7 days" style
+  // preset.
+  const availableWeeks = Array.from(new Map(
+    batches.filter(b => b.periodStart && b.periodEnd).map(b => [`${b.periodStart}__${b.periodEnd}`, b])
+  ).values()).sort((a, b) => new Date(b.periodEnd) - new Date(a.periodEnd));
+  const [selectedWeekKey, setSelectedWeekKey] = useState("");
+  const [selectedMonth, setSelectedMonth] = useState(todayISO().slice(0, 7));
+  const availableYears = Array.from(new Set(batches.filter(b => b.periodStart).map(b => b.periodStart.slice(0, 4)))).sort().reverse();
+  const [selectedYear, setSelectedYear] = useState(availableYears[0] || String(new Date().getFullYear()));
   const [customStart, setCustomStart] = useState("");
   const [customEnd, setCustomEnd] = useState("");
-  const [showFiles, setShowFiles] = useState(false);
 
   const datedCount = batches.filter(b => b.periodStart && b.periodEnd).length;
 
-  function applyPreset(id) {
-    setPreset(id);
-    if (id === "custom") return; // wait for both custom dates to be filled
-    if (id === "all") { setSelectedKeys(new Set(batches.map(b => b.id))); return; }
-    const def = DATE_PRESETS.find(p => p.id === id);
-    const range = def.range();
-    const matched = batchesInRange(batches, range.start, range.end);
-    setSelectedKeys(new Set(matched.map(b => b.id)));
+  function applyFilter() {
+    if (granularity === "week") {
+      if (!selectedWeekKey) { setSelectedKeys(new Set(batches.map(b => b.id))); return; }
+      const [start, end] = selectedWeekKey.split("__");
+      setSelectedKeys(new Set(batchesInRange(batches, start, end).map(b => b.id)));
+    } else if (granularity === "month") {
+      const { start, end } = monthRange(selectedMonth);
+      setSelectedKeys(new Set(batchesInRange(batches, start, end).map(b => b.id)));
+    } else if (granularity === "year") {
+      const { start, end } = yearRange(selectedYear);
+      setSelectedKeys(new Set(batchesInRange(batches, start, end).map(b => b.id)));
+    } else if (granularity === "custom" && customStart && customEnd) {
+      setSelectedKeys(new Set(batchesInRange(batches, customStart, customEnd).map(b => b.id)));
+    }
   }
-
-  function applyCustom(start, end) {
-    setCustomStart(start); setCustomEnd(end);
-    if (start && end) setSelectedKeys(new Set(batchesInRange(batches, start, end).map(b => b.id)));
-  }
+  // Re-apply whenever the active tab or its own picker value changes, so
+  // switching tabs doesn't leave a stale selection from the previous one.
+  useEffect(() => { applyFilter(); }, [granularity, selectedWeekKey, selectedMonth, selectedYear]);
 
   const toggleFile = (b) => {
     setSelectedKeys(prev => {
@@ -626,26 +649,54 @@ function ReportFilters({ batches, selectedKeys, setSelectedKeys }) {
     });
   };
 
+  const GRANULARITY_TABS = [["week", "Weekly"], ["month", "Monthly"], ["year", "Yearly"], ["custom", "Custom"]];
+
   return (
     <div style={{ marginBottom: 20 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <div style={{ display: "inline-flex", gap: 4, background: C.line, padding: 4, borderRadius: 10 }}>
-          {DATE_PRESETS.map(p => (
-            <button key={p.id} onClick={() => applyPreset(p.id)} style={{
-              border: "none", borderRadius: 7, background: preset === p.id ? C.panel : "transparent",
-              color: preset === p.id ? C.ink : C.sub, padding: "6px 13px", fontSize: 12,
-              fontWeight: preset === p.id ? 700 : 500, cursor: "pointer",
-              boxShadow: preset === p.id ? "0 1px 3px rgba(15,18,34,0.12)" : "none", transition: "all .12s",
-            }}>{p.label}</button>
+          {GRANULARITY_TABS.map(([id, label]) => (
+            <button key={id} onClick={() => setGranularity(id)} style={{
+              border: "none", borderRadius: 7, background: granularity === id ? C.railActiveBg : "transparent",
+              color: granularity === id ? C.railTextActive : C.sub, padding: "6px 13px", fontSize: 12,
+              fontWeight: granularity === id ? 700 : 500, cursor: "pointer", transition: "all .12s",
+            }}>{label}</button>
           ))}
         </div>
-        {preset === "custom" && (
+        {granularity === "week" && (
+          <select value={selectedWeekKey} onChange={(e) => setSelectedWeekKey(e.target.value)}
+            style={{ border: `1px solid ${C.line}`, borderRadius: 7, padding: "6px 10px", fontSize: 12, background: C.panel, color: C.ink }}>
+            <option value="">All weeks</option>
+            {availableWeeks.map(b => (
+              <option key={`${b.periodStart}__${b.periodEnd}`} value={`${b.periodStart}__${b.periodEnd}`}>
+                {new Date(b.periodStart).toLocaleDateString()} – {new Date(b.periodEnd).toLocaleDateString()}
+              </option>
+            ))}
+          </select>
+        )}
+        {granularity === "month" && (
+          <input type="month" value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value)}
+            style={{ border: `1px solid ${C.line}`, borderRadius: 7, padding: "6px 10px", fontSize: 12, background: C.panel, color: C.ink }} />
+        )}
+        {granularity === "year" && (
+          <select value={selectedYear} onChange={(e) => setSelectedYear(e.target.value)}
+            style={{ border: `1px solid ${C.line}`, borderRadius: 7, padding: "6px 10px", fontSize: 12, background: C.panel, color: C.ink }}>
+            {availableYears.length === 0 && <option value={selectedYear}>{selectedYear}</option>}
+            {availableYears.map(y => <option key={y} value={y}>{y}</option>)}
+          </select>
+        )}
+        {granularity === "custom" && (
           <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <input type="date" value={customStart} onChange={(e) => applyCustom(e.target.value, customEnd)}
+            <input type="date" value={customStart} onChange={(e) => setCustomStart(e.target.value)}
               style={{ border: `1px solid ${C.line}`, borderRadius: 7, padding: "5px 8px", fontSize: 12 }} />
             <span style={{ color: C.sub, fontSize: 12 }}>to</span>
-            <input type="date" value={customEnd} onChange={(e) => applyCustom(customStart, e.target.value)}
+            <input type="date" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)}
               style={{ border: `1px solid ${C.line}`, borderRadius: 7, padding: "5px 8px", fontSize: 12 }} />
+            <button onClick={applyFilter} disabled={!customStart || !customEnd} style={{
+              border: "none", background: C.navy, color: C.railTextActive, borderRadius: 7, padding: "6px 14px",
+              fontSize: 12, fontWeight: 700, cursor: customStart && customEnd ? "pointer" : "default",
+              opacity: customStart && customEnd ? 1 : 0.5,
+            }}>Filter Result</button>
           </span>
         )}
         <span style={{ flex: 1 }} />
@@ -911,6 +962,26 @@ function ReportsTab({ batches, selectedKeys, setSelectedKeys, rules, adjustments
       </div>
 
       <ReportFilters batches={batches} selectedKeys={selectedKeys} setSelectedKeys={setSelectedKeys} />
+
+      {(() => {
+        const datedSelected = selectedBatches.filter(b => b.periodStart && b.periodEnd);
+        const numDays = datedSelected.length
+          ? Math.round((Math.max(...datedSelected.map(b => new Date(b.periodEnd))) - Math.min(...datedSelected.map(b => new Date(b.periodStart)))) / 86400000) + 1
+          : 0;
+        const avgDailySales = numDays > 0 ? agg.totals.stake / numDays : 0;
+        return (
+          <div className="kpi-row" style={{ display: "flex", gap: 14, marginBottom: 20, flexWrap: "wrap" }}>
+            <Kpi label="Total Stake" value={nairaShort(agg.totals.stake)} />
+            <Kpi label="Total Payout" value={nairaShort(agg.totals.payout)} />
+            <Kpi label="Net Profit" value={nairaShort(agg.totals.profit)} />
+            <Kpi label="Commission" value={nairaShort(agg.totals.commission)} />
+            <Kpi label="Avg Daily Sales" value={nairaShort(avgDailySales)} />
+            <Kpi label="Number of Tickets" value={Math.round(agg.agents.reduce((s, a) => s + a.tickets, 0)).toLocaleString()} />
+            <Kpi label="Number of Days" value={numDays} />
+            <Kpi label="Agents With Activity" value={agg.agents.length} />
+          </div>
+        );
+      })()}
 
       <Panel>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: filtersExpanded ? 14 : (activeSlicerCount > 0 ? 10 : 0) }}>
@@ -2637,8 +2708,8 @@ function Panel({ title, right, children, style }) {
   return (
     <div style={{ background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, marginBottom: 20, overflow: "hidden", ...style }}>
       {title && (
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 18px", borderBottom: `1px solid ${C.line}`, background: "#FAFBFC" }}>
-          <div style={{ fontSize: 13.5, fontWeight: 700 }}>{title}</div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 18px", borderBottom: `1px solid ${C.line}`, background: C.railActiveBg }}>
+          <div style={{ fontSize: 13.5, fontWeight: 700, color: C.railTextActive }}>{title}</div>
           {right}
         </div>
       )}

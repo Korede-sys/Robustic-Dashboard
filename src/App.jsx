@@ -927,6 +927,7 @@ const REPORT_VIEWS = [
 
 function ReportsTab({ batches, selectedKeys, setSelectedKeys, rules, adjustments, trends, series, fortyPercentAgents, noSupplementalAgents }) {
   const [view, setView] = useState("overview");
+  const [reportViewId, setReportViewId] = useState("all");
   const [slicerProducts, setSlicerProducts] = useState(new Set());
   const [slicerStates, setSlicerStates] = useState(new Set());
   const [slicerChannels, setSlicerChannels] = useState(new Set());
@@ -963,90 +964,139 @@ function ReportsTab({ batches, selectedKeys, setSelectedKeys, rules, adjustments
 
       <ReportFilters batches={batches} selectedKeys={selectedKeys} setSelectedKeys={setSelectedKeys} />
 
-      <div style={{ marginBottom: 16 }}>
-        <select
-          value={slicerProducts.size === 1 ? [...slicerProducts][0] : ""}
-          onChange={(e) => setSlicerProducts(e.target.value ? new Set([e.target.value]) : new Set())}
-          style={{
-            border: `1px solid ${C.line}`, background: C.panel, color: C.ink, borderRadius: 9,
-            padding: "9px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer", minWidth: 200,
-          }}>
-          <option value="">All products</option>
-          {dateOnlyAgg.products.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
-        </select>
-      </div>
-
       {(() => {
-        const datedSelected = selectedBatches.filter(b => b.periodStart && b.periodEnd);
-        const numDays = datedSelected.length
-          ? Math.round((Math.max(...datedSelected.map(b => new Date(b.periodEnd))) - Math.min(...datedSelected.map(b => new Date(b.periodStart)))) / 86400000) + 1
-          : 0;
-        const avgDailySales = numDays > 0 ? agg.totals.stake / numDays : 0;
-        // Total Wins / Pending Payout only have real meaning for products
-        // whose raw file actually separates MoneyWin from MoneyPayout
-        // (confirmed for Luckyball/Luckygreek/Rocket Man; Globalbet/Sports
-        // don't have this split in any file seen so far). Showing a real
-        // number when it's real, and an honest "—" rather than a guessed
-        // zero when it isn't, matters here -- a silent 0 would read as
-        // "nothing pending" when the truth is "not tracked for this product."
-        const hasWinData = agg.totals.hasMoneyWinData;
-        const pendingPayout = hasWinData ? agg.totals.moneyWin - agg.totals.payout : null;
+        // Confirmed scope: this left-hand list mirrors the reference's
+        // sidebar, using real Robustic data wherever a real mapping exists.
+        // "All Elbet" combines the 3 products that share that provider.
+        // "Online Player Report" maps to the existing online-channel filter,
+        // not a product -- a genuinely different kind of slice. xPool and
+        // "Sport Ticket report" are shown but disabled with an explanation
+        // rather than silently included or silently dropped -- xPool isn't
+        // a tracked product at all yet (same status as S.Aviator, flagged
+        // earlier this session), and "Sport Ticket report" isn't clearly
+        // distinct from Sport Sales report without more information.
+        const REPORT_LIST = [
+          { id: "all", label: "All products", kind: "all" },
+          { id: "all_elbet", label: "All Elbet", kind: "products", products: ["Luckyball", "Luckygreek", "Rocket Man"] },
+          { id: "luckyball", label: "Luckyball", kind: "products", products: ["Luckyball"] },
+          { id: "luckygreek", label: "LuckyGreek", kind: "products", products: ["Luckygreek"] },
+          { id: "rocketman", label: "RocketMan", kind: "products", products: ["Rocket Man"] },
+          { id: "virtual", label: "Virtual (Globalbet)", kind: "products", products: ["Globalbet Virtual"] },
+          { id: "sportsales", label: "Sport Sales report", kind: "products", products: ["Sports"] },
+          { id: "onlineplayers", label: "Online Player Report", kind: "channel", channel: "online" },
+          { id: "xpool", label: "xPool", kind: "disabled", reason: "Not a tracked product yet — no sample file or confirmed formula (same status as S.Aviator)." },
+          { id: "sportticket", label: "Sport Ticket report", kind: "disabled", reason: "Not clearly distinct from Sport Sales report without more detail on what differs." },
+        ];
+        const selected = REPORT_LIST.find(r => r.id === reportViewId) || REPORT_LIST[0];
+
+        const reportBatches = selected.kind === "channel" ? selectedBatches
+          : selected.kind === "products" ? filterBatchesForSlicers(selectedBatches, { products: new Set(selected.products), states: new Set(), channels: new Set() })
+          : selectedBatches;
+        const reportAggRaw = aggregateBatches(reportBatches, rules, adjustments, fortyPercentAgents, noSupplementalAgents);
+        const reportAgg = selected.kind === "channel"
+          ? { ...reportAggRaw, agents: reportAggRaw.agents.filter(a => a.channel === selected.channel) }
+          : reportAggRaw;
+        if (selected.kind === "channel") {
+          // totals need recomputing too, since filtering agents after the
+          // fact doesn't retroactively adjust the pre-summed totals object
+          const filtered = reportAgg.agents;
+          reportAgg.totals = {
+            stake: filtered.reduce((s, a) => s + a.stake, 0), payout: filtered.reduce((s, a) => s + a.payout, 0),
+            profit: filtered.reduce((s, a) => s + a.profit, 0), commission: filtered.reduce((s, a) => s + a.sourceCommission, 0),
+            monthlyBonus: filtered.reduce((s, a) => s + a.monthlyBonus, 0),
+            moneyWin: filtered.reduce((s, a) => s + a.moneyWin, 0), hasMoneyWinData: filtered.some(a => a.hasMoneyWinData),
+          };
+        }
+
         return (
-          <div className="kpi-row" style={{ display: "flex", gap: 14, marginBottom: 20, flexWrap: "wrap" }}>
-            <Kpi label="Total Wins" value={hasWinData ? nairaShort(agg.totals.moneyWin) : nairaShort(agg.totals.payout)} />
-            <Kpi label="Total Payout" value={nairaShort(agg.totals.payout)} />
-            <Kpi label="Pending Payout" value={hasWinData ? nairaShort(pendingPayout) : "—"} />
-            <Kpi label="Net Profit" value={nairaShort(agg.totals.profit)} />
-            <Kpi label="Commission" value={nairaShort(agg.totals.commission)} />
-            <Kpi label="Avg Daily Sales" value={nairaShort(avgDailySales)} />
-            <Kpi label="Number of Tickets" value={Math.round(agg.agents.reduce((s, a) => s + a.tickets, 0)).toLocaleString()} />
-            <Kpi label="Number of Days" value={numDays} />
+          <div style={{ display: "flex", gap: 20, alignItems: "flex-start" }}>
+            <div style={{ width: 200, flexShrink: 0 }}>
+              <Panel title="Sales Report" style={{ marginBottom: 0 }}>
+                {REPORT_LIST.map(r => (
+                  <button key={r.id} disabled={r.kind === "disabled"}
+                    onClick={() => setReportViewId(r.id)}
+                    title={r.kind === "disabled" ? r.reason : undefined}
+                    style={{
+                      display: "block", width: "100%", textAlign: "left", border: "none", borderRadius: 7,
+                      background: reportViewId === r.id ? C.railActiveBg : "transparent",
+                      color: r.kind === "disabled" ? C.sub : (reportViewId === r.id ? C.railTextActive : C.ink),
+                      padding: "8px 10px", fontSize: 13, fontWeight: reportViewId === r.id ? 700 : 500,
+                      cursor: r.kind === "disabled" ? "not-allowed" : "pointer", marginBottom: 2,
+                      opacity: r.kind === "disabled" ? 0.55 : 1,
+                    }}>{r.label}</button>
+                ))}
+              </Panel>
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              {(() => {
+                const datedSelected = reportBatches.filter(b => b.periodStart && b.periodEnd);
+                const numDays = datedSelected.length
+                  ? Math.round((Math.max(...datedSelected.map(b => new Date(b.periodEnd))) - Math.min(...datedSelected.map(b => new Date(b.periodStart)))) / 86400000) + 1
+                  : 0;
+                const avgDailySales = numDays > 0 ? reportAgg.totals.stake / numDays : 0;
+                const hasWinData = reportAgg.totals.hasMoneyWinData;
+                const pendingPayout = hasWinData ? reportAgg.totals.moneyWin - reportAgg.totals.payout : null;
+                return (
+                  <>
+                    <div className="kpi-row" style={{ display: "flex", gap: 14, marginBottom: 20, flexWrap: "wrap" }}>
+                      <Kpi label="Total Wins" value={hasWinData ? nairaShort(reportAgg.totals.moneyWin) : nairaShort(reportAgg.totals.payout)} />
+                      <Kpi label="Total Payout" value={nairaShort(reportAgg.totals.payout)} />
+                      <Kpi label="Pending Payout" value={hasWinData ? nairaShort(pendingPayout) : "—"} />
+                      <Kpi label="Net Profit" value={nairaShort(reportAgg.totals.profit)} />
+                      <Kpi label="Commission" value={nairaShort(reportAgg.totals.commission)} />
+                      <Kpi label="Avg Daily Sales" value={nairaShort(avgDailySales)} />
+                      <Kpi label="Number of Tickets" value={Math.round(reportAgg.agents.reduce((s, a) => s + a.tickets, 0)).toLocaleString()} />
+                      <Kpi label="Number of Days" value={numDays} />
+                    </div>
+                    <Panel title="Report" right={
+                      <button onClick={() => downloadCSV("robustic_sales_report.csv", reportAgg.agents, [
+                        { label: "S/N", get: (a) => a.rank }, { label: "AgentUsername", get: (a) => a.username },
+                        { label: "NumberOfTickets", get: (a) => Math.round(a.tickets) }, { label: "MoneyIn", get: (a) => a.stake },
+                        { label: "MoneyWin", get: (a) => a.hasMoneyWinData ? a.moneyWin : "" }, { label: "MoneyPayout", get: (a) => a.payout },
+                        { label: "Profit", get: (a) => a.profit }, { label: "Commission", get: (a) => a.sourceCommission },
+                        { label: "Type", get: (a) => a.commissionType || "" },
+                      ])} style={{
+                        display: "flex", alignItems: "center", gap: 6, border: `1px solid ${C.line}`, background: C.panel, borderRadius: 8,
+                        padding: "7px 14px", fontSize: 12.5, fontWeight: 600, cursor: "pointer",
+                      }}><Download size={13} /> Export CSV</button>
+                    }>
+                      <div style={{ overflowX: "auto" }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 820 }}>
+                          <thead>
+                            <tr>
+                              {["S/N", "AgentUsername", "NumberOfTickets", "MoneyIn", "MoneyWin", "MoneyPayout", "Profit", "Commission", "Type"].map(h => (
+                                <th key={h} style={{ textAlign: h === "AgentUsername" || h === "Type" ? "left" : "right", padding: "8px 10px" }}>{h}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {reportAgg.agents.slice(0, 200).map((a) => (
+                              <tr key={a.username} style={{ borderTop: `1px solid ${C.line}` }}>
+                                <td style={{ padding: "8px 10px", textAlign: "right", ...nums }}>{a.rank}</td>
+                                <td style={{ padding: "8px 10px", ...mono }}>{a.username}</td>
+                                <td style={{ padding: "8px 10px", textAlign: "right", ...nums }}>{Math.round(a.tickets).toLocaleString()}</td>
+                                <td style={{ padding: "8px 10px", textAlign: "right", ...nums }}>{naira(a.stake)}</td>
+                                <td style={{ padding: "8px 10px", textAlign: "right", ...nums, color: a.hasMoneyWinData ? "inherit" : C.sub }}>{a.hasMoneyWinData ? naira(a.moneyWin) : "—"}</td>
+                                <td style={{ padding: "8px 10px", textAlign: "right", ...nums }}>{naira(a.payout)}</td>
+                                <td style={{ padding: "8px 10px", textAlign: "right", ...nums, color: a.profit < 0 ? C.brick : C.emerald }}>{naira(a.profit)}</td>
+                                <td style={{ padding: "8px 10px", textAlign: "right", ...nums }}>{naira(a.sourceCommission)}</td>
+                                <td style={{ padding: "8px 10px" }}>{a.commissionType || "—"}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        {reportAgg.agents.length > 200 && (
+                          <div style={{ fontSize: 12, color: C.sub, padding: "10px 2px" }}>Showing first 200 of {reportAgg.agents.length} agents — use Export CSV for the full list.</div>
+                        )}
+                      </div>
+                    </Panel>
+                  </>
+                );
+              })()}
+            </div>
           </div>
         );
       })()}
-
-      <Panel title="Report" right={
-        <button onClick={() => downloadCSV("robustic_sales_report.csv", agg.agents, [
-          { label: "S/N", get: (a) => a.rank }, { label: "AgentUsername", get: (a) => a.username },
-          { label: "NumberOfTickets", get: (a) => Math.round(a.tickets) }, { label: "MoneyIn", get: (a) => a.stake },
-          { label: "MoneyWin", get: (a) => a.hasMoneyWinData ? a.moneyWin : "" }, { label: "MoneyPayout", get: (a) => a.payout },
-          { label: "Profit", get: (a) => a.profit }, { label: "Commission", get: (a) => a.sourceCommission },
-          { label: "Type", get: (a) => a.commissionType || "" },
-        ])} style={{
-          display: "flex", alignItems: "center", gap: 6, border: `1px solid ${C.line}`, background: C.panel, borderRadius: 8,
-          padding: "7px 14px", fontSize: 12.5, fontWeight: 600, cursor: "pointer",
-        }}><Download size={13} /> Export CSV</button>
-      }>
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 820 }}>
-            <thead>
-              <tr>
-                {["S/N", "AgentUsername", "NumberOfTickets", "MoneyIn", "MoneyWin", "MoneyPayout", "Profit", "Commission", "Type"].map(h => (
-                  <th key={h} style={{ textAlign: h === "AgentUsername" || h === "Type" ? "left" : "right", padding: "8px 10px" }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {agg.agents.slice(0, 200).map((a) => (
-                <tr key={a.username} style={{ borderTop: `1px solid ${C.line}` }}>
-                  <td style={{ padding: "8px 10px", textAlign: "right", ...nums }}>{a.rank}</td>
-                  <td style={{ padding: "8px 10px", ...mono }}>{a.username}</td>
-                  <td style={{ padding: "8px 10px", textAlign: "right", ...nums }}>{Math.round(a.tickets).toLocaleString()}</td>
-                  <td style={{ padding: "8px 10px", textAlign: "right", ...nums }}>{naira(a.stake)}</td>
-                  <td style={{ padding: "8px 10px", textAlign: "right", ...nums, color: a.hasMoneyWinData ? "inherit" : C.sub }}>{a.hasMoneyWinData ? naira(a.moneyWin) : "—"}</td>
-                  <td style={{ padding: "8px 10px", textAlign: "right", ...nums }}>{naira(a.payout)}</td>
-                  <td style={{ padding: "8px 10px", textAlign: "right", ...nums, color: a.profit < 0 ? C.brick : C.emerald }}>{naira(a.profit)}</td>
-                  <td style={{ padding: "8px 10px", textAlign: "right", ...nums }}>{naira(a.sourceCommission)}</td>
-                  <td style={{ padding: "8px 10px" }}>{a.commissionType || "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {agg.agents.length > 200 && (
-            <div style={{ fontSize: 12, color: C.sub, padding: "10px 2px" }}>Showing first 200 of {agg.agents.length} agents — use Export CSV for the full list.</div>
-          )}
-        </div>
-      </Panel>
 
       <Panel>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: filtersExpanded ? 14 : (activeSlicerCount > 0 ? 10 : 0) }}>

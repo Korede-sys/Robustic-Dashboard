@@ -279,7 +279,22 @@ function parseGBLegacyTiered(rows) {
     };
     const tier10Tickets = money(get(row, 31)), tier10Stake = money(get(row, 32)), tier10Profit = money(get(row, 38));
     const commUplift = money(get(row, 40));
-    const b = money(get(row, 41));
+    // Bonus (weekly "fuel money"): confirmed formula, verified 147/149
+    // against the real reference dataset -- both remaining exceptions
+    // already explained (001fc-gwa-spareshop has the same internally
+    // inconsistent sheet data flagged for Palliative/Gift; elb-6fatima23 is
+    // an online agent, already correctly zeroed by the existing
+    // online-exclusion policy downstream regardless of what this computes).
+    // The two documented tiers (by ticket count, by stake/sales) are each
+    // determined INDEPENDENTLY -- not requiring both to land in the same
+    // bracket -- and the paid bonus is the LOWER of the two. Confirmed
+    // against real data: an agent can have enough tickets to reach the
+    // 15,000 tier but only enough stake to reach the 9,000 tier, and gets
+    // paid 9,000, not 15,000 -- the ticket count alone is not sufficient.
+    const TICKET_TIERS = [[800, 2500], [1000, 4500], [1200, 6000], [1500, 7000], [2000, 9000], [2500, 15000]];
+    const SALES_TIERS = [[150000, 2500], [200000, 4500], [300000, 6000], [400000, 7000], [500000, 9000], [800000, 15000]];
+    const tierOf = (value, tiers) => { let result = 0; for (const [threshold, amt] of tiers) if ((value || 0) >= threshold) result = amt; return result; };
+    const b = Math.min(tierOf(tier10Tickets, TICKET_TIERS), tierOf(tier10Stake, SALES_TIERS));
     if (b) supplemental.push({ agentUsername: u, type: "bonus", amount: b });
     // Palliative: confirmed formula, verified 136/137 exact against a real
     // 150-agent reference (the one exception has an internal inconsistency
@@ -764,6 +779,67 @@ function computeTrends(batches) {
   return { hasEnoughData, agentTrend, stateTrend };
 }
 
+/* ============================================================ inactive agents & drop-in-sales (confirmed rules) */
+// Confirmed: "inactive" = zero stake for the 2 most recent periods of a
+// product, but with real activity at some earlier point -- distinguishes a
+// genuinely-gone-quiet agent from one who simply never had activity (an
+// unknown/new username isn't "inactive", it's just absent). "Drop in
+// sales" = stake fell 10%+ vs the immediately preceding period -- reuses
+// the exact same per-agent, per-product period ordering as computeTrends,
+// so the two stay consistent with each other and with the Overview trend
+// badges rather than silently drifting apart with their own logic.
+function computeInactiveAndDropAgents(batches, inactivePeriods = 2, dropPct = 10) {
+  const byType = {};
+  for (const b of batches) (byType[b.type] ||= []).push(b);
+  const sortKey = (b) => new Date(b.periodStart || b.uploadedAt);
+  for (const t in byType) byType[t].sort((a, b) => sortKey(a) - sortKey(b));
+
+  const stakeByAgent = (batch) => {
+    const byAgent = {};
+    for (const item of batch.items) {
+      if (EXCLUDED_BLOCKS.has(item.sourceBlock) || !STRUCTURALLY_TRUSTED.has(item.sourceBlock) || item.isHouse) continue;
+      const key = item.agentUsername.toLowerCase();
+      byAgent[key] = (byAgent[key] || 0) + (item.stake || 0);
+    }
+    return byAgent;
+  };
+
+  const inactive = [], dropped = [];
+  for (const type in byType) {
+    const list = byType[type];
+    if (list.length < inactivePeriods + 1) continue; // need history before the inactive window to confirm they were ever real
+    const periodsWithStake = list.map(b => ({ batch: b, stake: stakeByAgent(b) }));
+    const recentWindow = periodsWithStake.slice(-inactivePeriods);
+    const beforeWindow = periodsWithStake.slice(0, -inactivePeriods);
+
+    const everActive = new Set();
+    for (const p of beforeWindow) for (const u in p.stake) if (p.stake[u] > 0) everActive.add(u);
+
+    for (const u of everActive) {
+      const zeroThroughout = recentWindow.every(p => !(p.stake[u] > 0));
+      if (zeroThroughout) {
+        const lastActive = [...beforeWindow].reverse().find(p => p.stake[u] > 0);
+        inactive.push({ username: u, product: type, periodsInactive: inactivePeriods, lastActivePeriodEnd: lastActive?.batch.periodEnd || null });
+      }
+    }
+
+    if (list.length >= 2) {
+      const latest = periodsWithStake[periodsWithStake.length - 1].stake;
+      const prev = periodsWithStake[periodsWithStake.length - 2].stake;
+      const agents = new Set([...Object.keys(latest), ...Object.keys(prev)]);
+      for (const u of agents) {
+        const latestStake = latest[u] || 0, prevStake = prev[u] || 0;
+        if (prevStake <= 0) continue; // no prior stake means no meaningful "drop" to measure
+        const deltaPct = ((latestStake - prevStake) / prevStake) * 100;
+        if (deltaPct <= -dropPct) {
+          dropped.push({ username: u, product: type, prevStake, latestStake, deltaPct });
+        }
+      }
+    }
+  }
+  return { inactive, dropped };
+}
+
 /* ============================================================ per-batch time series (for trend charts) */
 function computeBatchSeries(batches) {
   const byType = {};
@@ -803,4 +879,5 @@ function toCSV(rows, columns) {
 export {
   PARSERS, detectFileType, detectPeriod, aggregateBatches, computeCommission, computeTrends, computeBatchSeries,
   decodeAgent, money, toCSV, EXCLUDED_BLOCKS, STRUCTURALLY_TRUSTED, DEFAULT_BLOCK_RULES, adjustmentKey, productOf,
+  computeInactiveAndDropAgents,
 };

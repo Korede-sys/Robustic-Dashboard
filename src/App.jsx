@@ -5,13 +5,14 @@ import {
 import {
   Upload, Download, CheckCircle2, AlertTriangle, ShieldCheck, ShieldAlert,
   FileSpreadsheet, History as HistoryIcon, BookOpen, X, Loader2, Trash2, LayoutGrid,
-  Users, Package, MapPin, Search, ArrowUp, ArrowDown, Minus, Phone, ClipboardList, TrendingUp, Check, LogOut, UserCog,
+  Users, Package, MapPin, Search, ArrowUp, ArrowDown, Minus, Phone, ClipboardList, TrendingUp, TrendingDown, Check, LogOut, UserCog,
   Sliders, Activity as ActivityIcon, Eye, ChevronDown, Moon, Sun,
+  BarChart3, Calendar, Scale, Lightbulb, CreditCard, PhoneOff, Store,
 } from "lucide-react";
 
 import {
   PARSERS, detectFileType, detectPeriod, aggregateBatches, computeTrends, computeBatchSeries, toCSV,
-  decodeAgent, productOf,
+  decodeAgent, productOf, computeInactiveAndDropAgents,
 } from "./lib/engine-core";
 import { parseCSV } from "./lib/csvparse";
 import { can } from "./lib/permissions";
@@ -66,8 +67,8 @@ const THEME_VARS = {
   },
 };
 function themeVarsCSS(vars) { return Object.entries(vars).map(([k, v]) => `--${k}: ${v};`).join(" "); }
-const serif = { fontFamily: "'Plus Jakarta Sans', -apple-system, sans-serif", fontWeight: 800 };
-const sans = { fontFamily: "'Plus Jakarta Sans', -apple-system, sans-serif" };
+const serif = { fontFamily: "'Inter', -apple-system, sans-serif", fontWeight: 800 };
+const sans = { fontFamily: "'Inter', -apple-system, sans-serif" };
 const mono = { fontFamily: "'IBM Plex Mono', 'SF Mono', Consolas, monospace" };
 const nums = { fontVariantNumeric: "tabular-nums" };
 
@@ -166,16 +167,31 @@ function downloadCSV(filename, rows, columns) {
 }
 
 /* ============================================================ UI shell */
+// Icons matched one-for-one against the AccessBet/Lovable reference
+// screenshots, applied to Robustic's closest equivalent page: Reports ->
+// "Dashboard" (bar chart), Upload -> "Payout Upload" (document), Needs
+// Attention -> "Inactive agents" (phone), Follow-ups -> "Drop-in sales"
+// (trending down), Clean Export -> "Commission" (card, since this is the
+// final payable-amount output), History -> "Weeks" (calendar), Payout
+// Rules -> "Payout Rules" (sliders, direct match, unchanged), Formulas ->
+// "Insights" (lightbulb), Activity -> "Reconciliation" (scale, an audit
+// trail is a form of reconciling what happened), Team -> "Agent Tiers"
+// (person+gear, direct match, unchanged -- already UserCog).
 const ALL_NAV = [
-  { id: "reports", label: "Reports", icon: LayoutGrid, action: "view_reports", section: "Overview" },
-  { id: "upload", label: "Upload & Process", icon: Upload, action: "upload", section: "Operations" },
-  { id: "lowactivity", label: "Needs Attention", icon: AlertTriangle, action: "manage_followups", section: "Operations" },
+  { id: "reports", label: "Reports", icon: BarChart3, action: "view_reports", section: "Overview" },
+  { id: "insights", label: "Insights", icon: Lightbulb, action: "view_reports", section: "Overview" },
+  { id: "upload", label: "Upload & Process", icon: FileSpreadsheet, action: "upload", section: "Operations" },
+  { id: "lowactivity", label: "Needs Attention", icon: Phone, action: "manage_followups", section: "Operations" },
+  { id: "inactive", label: "Inactive Agents", icon: PhoneOff, action: "manage_followups", section: "Operations" },
+  { id: "dropinsales", label: "Drop-in Sales", icon: TrendingDown, action: "manage_followups", section: "Operations" },
   { id: "followups", label: "Follow-ups", icon: ClipboardList, action: "manage_followups", section: "Operations" },
+  { id: "weeks", label: "Weeks", icon: Calendar, action: "view_reports", section: "Operations" },
   { id: "history", label: "History", icon: HistoryIcon, action: "view_reports", section: "Operations" },
-  { id: "export", label: "Clean Export", icon: Download, action: "export", section: "Finance" },
+  { id: "shopgroups", label: "Shop Groups", icon: Store, action: "view_reports", section: "Finance" },
+  { id: "export", label: "Clean Export", icon: CreditCard, action: "export", section: "Finance" },
   { id: "rules", label: "Payout Rules", icon: Sliders, action: "manage_rules", section: "Finance" },
   { id: "formulas", label: "Formulas", icon: BookOpen, action: "view_reports", section: "Finance" },
-  { id: "activity", label: "Activity", icon: ActivityIcon, action: "view_reports", section: "Admin" },
+  { id: "activity", label: "Activity", icon: Scale, action: "view_reports", section: "Admin" },
   { id: "users", label: "Team", icon: UserCog, action: "manage_users", section: "Admin" },
 ];
 
@@ -381,10 +397,11 @@ export default function App() {
   const agg = aggregateBatches(selectedBatches, rules, adjustments, fortyPercentAgents, noSupplementalAgents);
   const trends = computeTrends(batches);
   const series = computeBatchSeries(batches);
+  const { inactive: inactiveList, dropped: droppedList } = computeInactiveAndDropAgents(batches);
 
   return (
     <div data-theme={themeMode} style={{ background: C.paper, color: C.ink, minHeight: "100vh", display: "flex", ...sans }}>
-      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500;600&display=swap" />
+      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@500;600&display=swap" />
       <style>{`
         :root, [data-theme="light"] { ${themeVarsCSS(THEME_VARS.light)} }
         [data-theme="dark"] { ${themeVarsCSS(THEME_VARS.dark)} }
@@ -517,8 +534,22 @@ export default function App() {
             {tab === "lowactivity" && can(profile.role, "manage_followups") && (
               <LowActivityTab agg={agg} trends={trends} onCall={setCallAgent} />
             )}
+            {tab === "inactive" && can(profile.role, "manage_followups") && (
+              <InactiveAgentsTab agg={agg} inactiveList={inactiveList} onCall={setCallAgent} />
+            )}
+            {tab === "dropinsales" && can(profile.role, "manage_followups") && (
+              <DropInSalesTab agg={agg} droppedList={droppedList} onCall={setCallAgent} />
+            )}
             {tab === "followups" && can(profile.role, "manage_followups") && (
               <FollowUpsTab interventions={interventions} updateStatus={handleUpdateInterventionStatus} removeIntervention={removeInterventionRecord} />
+            )}
+            {tab === "weeks" && <WeeksTab batches={batches} rules={rules} fortyPercentAgents={fortyPercentAgents} noSupplementalAgents={noSupplementalAgents} />}
+            {tab === "shopgroups" && (
+              <ShopGroupsTab batches={batches} selectedKeys={selectedKeys} setSelectedKeys={setSelectedKeys}
+                rules={rules} fortyPercentAgents={fortyPercentAgents} noSupplementalAgents={noSupplementalAgents} />
+            )}
+            {tab === "insights" && (
+              <InsightsTab agg={agg} trends={trends} inactiveList={inactiveList} droppedList={droppedList} />
             )}
             {tab === "export" && can(profile.role, "export") && (
               <ExportTab agg={agg} canAdjust={can(profile.role, "manage_adjustments")} userId={session.user.id}
@@ -549,7 +580,7 @@ function RobusticMark() {
   return (
     <svg width="34" height="34" viewBox="0 0 34 34" style={{ flexShrink: 0 }}>
       <rect x="0" y="0" width="34" height="34" rx="8" fill={C.stamp} />
-      <text x="17" y="23.5" textAnchor="middle" fontFamily="'Plus Jakarta Sans', sans-serif" fontSize="17" fontWeight="800" fill="#17130F">A</text>
+      <text x="17" y="23.5" textAnchor="middle" fontFamily="'Inter', sans-serif" fontSize="17" fontWeight="800" fill="#17130F">A</text>
     </svg>
   );
 }
@@ -1065,6 +1096,57 @@ function OverviewTab({ agg, trends, series, hasData }) {
   );
 }
 
+function InsightsTab({ agg, trends, inactiveList, droppedList }) {
+  if (agg.agents.length === 0) return <EmptyState />;
+  const lossProducts = agg.products.filter(p => p.profit < 0);
+  const topGainers = Object.entries(trends.agentTrend || {})
+    .filter(([, t]) => t.deltaPct !== null && t.deltaPct > 0)
+    .sort((a, b) => b[1].deltaPct - a[1].deltaPct).slice(0, 3);
+  const topDecliners = Object.entries(trends.agentTrend || {})
+    .filter(([, t]) => t.deltaPct !== null && t.deltaPct < 0)
+    .sort((a, b) => a[1].deltaPct - b[1].deltaPct).slice(0, 3);
+  const topState = agg.states[0];
+
+  const insights = [];
+  if (inactiveList.length > 0) insights.push({ tone: "amber", icon: PhoneOff, text: `${inactiveList.length} agent/product pair(s) have gone inactive — zero activity for 2 straight periods after previously being active.` });
+  if (droppedList.length > 0) insights.push({ tone: "red", icon: TrendingDown, text: `${droppedList.length} agent/product pair(s) saw a 10%+ drop in stake vs. the previous period.` });
+  if (lossProducts.length > 0) insights.push({ tone: "red", icon: AlertTriangle, text: `${lossProducts.map(p => p.name).join(", ")} ${lossProducts.length === 1 ? "is" : "are"} running a net loss this period.` });
+  for (const [username, t] of topGainers) insights.push({ tone: "green", icon: ArrowUp, text: `${username} is up ${t.deltaPct.toFixed(0)}% vs. their previous period (${naira(t.prevStake)} → ${naira(t.latestStake)}).` });
+  for (const [username, t] of topDecliners) insights.push({ tone: "red", icon: ArrowDown, text: `${username} is down ${Math.abs(t.deltaPct).toFixed(0)}% vs. their previous period (${naira(t.prevStake)} → ${naira(t.latestStake)}).` });
+  if (topState) insights.push({ tone: "indigo", icon: MapPin, text: `${topState.state} leads this period with ${naira(topState.stake)} in stake.` });
+  if (!trends.hasEnoughData) insights.push({ tone: "neutral", icon: Calendar, text: "Upload a second period of the same product to unlock period-over-period insights (gainers, decliners, inactive agents, drop-in-sales)." });
+
+  const TONE_COLORS = { amber: C.amber, red: C.brick, green: C.emerald, indigo: C.navy, neutral: C.sub };
+  const TONE_BG = { amber: C.amberSoft, red: C.brickSoft, green: C.emeraldSoft, indigo: C.stampSoft, neutral: C.paper };
+
+  return (
+    <>
+      <div style={{ marginBottom: 6 }}>
+        <h1 style={{ ...serif, fontSize: 28, fontWeight: 500, margin: "0 0 4px" }}>Insights</h1>
+        <div style={{ fontSize: 13, color: C.sub }}>Auto-generated highlights from this period's data — movers, risks, and where to look next.</div>
+      </div>
+      <Panel>
+        {insights.length === 0 ? (
+          <div style={{ fontSize: 13, color: C.sub }}>Nothing notable to flag this period.</div>
+        ) : (
+          insights.map((ins, i) => {
+            const Icon = ins.icon;
+            return (
+              <div key={i} style={{
+                display: "flex", gap: 12, alignItems: "flex-start", padding: "12px 14px",
+                borderLeft: `3px solid ${TONE_COLORS[ins.tone]}`, background: TONE_BG[ins.tone], marginBottom: 8,
+              }}>
+                <Icon size={16} color={TONE_COLORS[ins.tone]} style={{ flexShrink: 0, marginTop: 1 }} />
+                <div style={{ fontSize: 13.5, lineHeight: 1.5 }}>{ins.text}</div>
+              </div>
+            );
+          })
+        )}
+      </Panel>
+    </>
+  );
+}
+
 function TrendBadge({ username, trends }) {
   const t = trends.agentTrend[username.toLowerCase()];
   if (!t || t.deltaPct === null || t.deltaPct === undefined) return <span style={{ ...nums, color: C.sub, fontSize: 12 }}>—</span>;
@@ -1413,6 +1495,147 @@ function LowActivityTab({ agg, trends, onCall }) {
             </div>
           );
         })}
+      </Panel>
+    </>
+  );
+}
+
+function ShopGroupsTab({ batches, selectedKeys, setSelectedKeys, rules, fortyPercentAgents, noSupplementalAgents }) {
+  const [view, setView] = useState("tonybetjosh");
+  const selectedBatches = batches.filter(b => selectedKeys.has(b.id));
+  const agg = aggregateBatches(selectedBatches, rules, [], fortyPercentAgents, noSupplementalAgents);
+  if (agg.agents.length === 0) return <EmptyState />;
+
+  // Confirmed scope: specifically tonybet*/josh*-named shops (by username,
+  // not by commission plan) for one group, and company shops (001-prefix,
+  // already classified via channel==="company_shop") for the other --
+  // these are two different groupings, not the same list sliced two ways.
+  const matching = view === "tonybetjosh"
+    ? agg.agents.filter(a => /tonybet|josh/i.test(a.username))
+    : agg.agents.filter(a => a.channel === "company_shop");
+
+  const totals = matching.reduce((acc, a) => ({
+    stake: acc.stake + (a.stake || 0), payout: acc.payout + (a.payout || 0), profit: acc.profit + (a.profit || 0),
+    commission: acc.commission + (a.sourceCommission || 0), bonus: acc.bonus + (a.bonus || 0),
+    palliative: acc.palliative + (a.palliative || 0), gift: acc.gift + (a.gift || 0), tickets: acc.tickets + (a.tickets || 0),
+  }), { stake: 0, payout: 0, profit: 0, commission: 0, bonus: 0, palliative: 0, gift: 0, tickets: 0 });
+
+  return (
+    <>
+      <div style={{ marginBottom: 6 }}>
+        <h1 style={{ ...serif, fontSize: 28, fontWeight: 500, margin: "0 0 4px" }}>Shop Groups</h1>
+        <div style={{ fontSize: 13, color: C.sub }}>Rolled-up totals for specific owner groups — one combined figure, not a per-shop breakdown.</div>
+      </div>
+
+      <ReportFilters batches={batches} selectedKeys={selectedKeys} setSelectedKeys={setSelectedKeys} />
+
+      <div style={{ display: "inline-flex", gap: 4, background: C.line, padding: 4, borderRadius: 10, marginBottom: 20 }}>
+        {[["tonybetjosh", "Tonybet & Josh"], ["companyshop", "Company Shops (001)"]].map(([id, label]) => (
+          <button key={id} onClick={() => setView(id)} style={{
+            padding: "7px 16px", border: "none", borderRadius: 7,
+            background: view === id ? C.panel : "transparent", color: view === id ? C.ink : C.sub,
+            fontSize: 12.5, fontWeight: view === id ? 700 : 600, cursor: "pointer",
+            boxShadow: view === id ? "0 1px 3px rgba(15,18,34,0.12)" : "none", transition: "all .12s",
+          }}>{label}</button>
+        ))}
+      </div>
+
+      <Panel title={`${matching.length} shop(s) in this group`}>
+        {matching.length === 0 ? (
+          <div style={{ fontSize: 13, color: C.sub }}>No matching shops in the current filter/date range.</div>
+        ) : (
+          <div className="kpi-row" style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+            <Kpi label="Stake" value={nairaShort(totals.stake)} />
+            <Kpi label="Payout" value={nairaShort(totals.payout)} />
+            <Kpi label="Profit" value={nairaShort(totals.profit)} negative={totals.profit < 0} />
+            <Kpi label="Commission" value={nairaShort(totals.commission)} />
+            <Kpi label="Bonus" value={nairaShort(totals.bonus)} />
+            <Kpi label="Palliative" value={nairaShort(totals.palliative)} />
+            <Kpi label="Gift" value={nairaShort(totals.gift)} />
+            <Kpi label="Tickets" value={Math.round(totals.tickets).toLocaleString()} />
+          </div>
+        )}
+      </Panel>
+
+      {matching.length > 0 && (
+        <Panel title="Shops included in this total">
+          {matching.map(a => (
+            <div key={a.username} style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", fontSize: 12.5, borderBottom: `1px solid ${C.line}` }}>
+              <span style={{ ...mono }}>{a.username}</span>
+              <span style={{ ...nums }}>{naira(a.stake)}</span>
+            </div>
+          ))}
+        </Panel>
+      )}
+    </>
+  );
+}
+
+function InactiveAgentsTab({ agg, inactiveList, onCall }) {
+  if (agg.agents.length === 0) return <EmptyState />;
+  const agentByUsername = Object.fromEntries(agg.agents.map(a => [a.username.toLowerCase(), a]));
+  const enriched = inactiveList.map(i => ({ ...i, agent: agentByUsername[i.username] })).filter(i => i.agent);
+  return (
+    <>
+      <div style={{ marginBottom: 6 }}>
+        <h1 style={{ ...serif, fontSize: 28, fontWeight: 500, margin: "0 0 4px" }}>Inactive Agents</h1>
+        <div style={{ fontSize: 13, color: C.sub }}>Zero activity for 2 consecutive periods on a product they were previously active on (confirmed rule).</div>
+      </div>
+      <Panel title={`${enriched.length} agent(s) flagged`}>
+        {enriched.length === 0 && <div style={{ fontSize: 13, color: C.sub }}>No agents currently meet this — needs at least 3 uploaded periods of the same product to check.</div>}
+        {enriched.map(({ agent, product, lastActivePeriodEnd }) => (
+          <div key={`${agent.username}-${product}`} style={{
+            display: "flex", justifyContent: "space-between", alignItems: "center",
+            padding: "12px 14px", borderLeft: `3px solid ${C.sub}`, background: C.paper, marginBottom: 8,
+          }}>
+            <div>
+              <div style={{ fontWeight: 600, fontSize: 13.5 }}>{agent.username} <span style={{ color: C.sub, fontWeight: 400 }}>· {agent.state}</span></div>
+              <div style={{ fontSize: 12, color: C.sub, marginTop: 2 }}>
+                {PRODUCT_LABELS[product] || product} · last active {lastActivePeriodEnd ? new Date(lastActivePeriodEnd).toLocaleDateString() : "unknown"}
+              </div>
+            </div>
+            <button onClick={() => onCall(agent)} style={{
+              display: "flex", alignItems: "center", gap: 6, border: "none", background: C.navy, color: "#fff", borderRadius: 8,
+              padding: "7px 14px", fontSize: 12.5, cursor: "pointer", flexShrink: 0,
+            }}><Phone size={13} /> Log call</button>
+          </div>
+        ))}
+      </Panel>
+    </>
+  );
+}
+
+function DropInSalesTab({ agg, droppedList, onCall }) {
+  if (agg.agents.length === 0) return <EmptyState />;
+  const agentByUsername = Object.fromEntries(agg.agents.map(a => [a.username.toLowerCase(), a]));
+  const enriched = droppedList.map(d => ({ ...d, agent: agentByUsername[d.username] }))
+    .filter(d => d.agent).sort((a, b) => a.deltaPct - b.deltaPct);
+  return (
+    <>
+      <div style={{ marginBottom: 6 }}>
+        <h1 style={{ ...serif, fontSize: 28, fontWeight: 500, margin: "0 0 4px" }}>Drop-in Sales</h1>
+        <div style={{ fontSize: 13, color: C.sub }}>Stake down 10% or more vs. the immediately preceding period of the same product (confirmed rule).</div>
+      </div>
+      <Panel title={`${enriched.length} agent(s) flagged`}>
+        {enriched.length === 0 && <div style={{ fontSize: 13, color: C.sub }}>No qualifying drops — needs at least 2 uploaded periods of the same product to check.</div>}
+        {enriched.map(({ agent, product, prevStake, latestStake, deltaPct }) => (
+          <div key={`${agent.username}-${product}`} style={{
+            display: "flex", justifyContent: "space-between", alignItems: "center",
+            padding: "12px 14px", borderLeft: `3px solid ${C.brick}`, background: C.brickSoft, marginBottom: 8,
+          }}>
+            <div>
+              <div style={{ fontWeight: 600, fontSize: 13.5 }}>{agent.username} <span style={{ color: C.sub, fontWeight: 400 }}>· {agent.state}</span></div>
+              <div style={{ fontSize: 12, color: C.sub, marginTop: 2 }}>
+                {PRODUCT_LABELS[product] || product} · {naira(prevStake)} → {naira(latestStake)} ·{" "}
+                <span style={{ color: C.brick, fontWeight: 600 }}>{deltaPct.toFixed(1)}%</span>
+              </div>
+            </div>
+            <button onClick={() => onCall(agent)} style={{
+              display: "flex", alignItems: "center", gap: 6, border: "none", background: C.navy, color: "#fff", borderRadius: 8,
+              padding: "7px 14px", fontSize: 12.5, cursor: "pointer", flexShrink: 0,
+            }}><Phone size={13} /> Log call</button>
+          </div>
+        ))}
       </Panel>
     </>
   );
@@ -1825,6 +2048,56 @@ function ExportTab({ agg, canAdjust, userId, refreshAdjustments, logActivityFn }
 }
 
 /* ============================================================ History */
+function WeeksTab({ batches, rules, fortyPercentAgents, noSupplementalAgents }) {
+  // Groups uploaded files by their real reporting period (periodStart +
+  // periodEnd), not by upload order or filename -- several products can
+  // share the same week, and this is the one place that shows "everything
+  // that happened in week X" as a single row, which neither History
+  // (file-by-file) nor Reports (filterable, but not period-grouped) does.
+  const byPeriod = new Map();
+  for (const b of batches) {
+    const key = `${b.periodStart || "?"}__${b.periodEnd || "?"}`;
+    if (!byPeriod.has(key)) byPeriod.set(key, []);
+    byPeriod.get(key).push(b);
+  }
+  const periods = Array.from(byPeriod.entries())
+    .map(([key, periodBatches]) => {
+      const [periodStart, periodEnd] = key.split("__");
+      const agg = aggregateBatches(periodBatches, rules, [], fortyPercentAgents, noSupplementalAgents);
+      const products = [...new Set(periodBatches.map(b => PRODUCT_LABELS[b.type] || b.type))];
+      return { periodStart, periodEnd, products, batchCount: periodBatches.length, totals: agg.totals, agentCount: agg.agents.length };
+    })
+    .sort((a, b) => new Date(b.periodEnd) - new Date(a.periodEnd));
+
+  return (
+    <>
+      <div style={{ marginBottom: 6 }}>
+        <h1 style={{ ...serif, fontSize: 28, fontWeight: 500, margin: "0 0 4px" }}>Weeks</h1>
+        <div style={{ fontSize: 13, color: C.sub }}>Every uploaded period, grouped across products — one row per real reporting week, not per file.</div>
+      </div>
+      <Panel title={`${periods.length} period(s)`}>
+        {periods.length === 0 && <div style={{ fontSize: 13, color: C.sub }}>Nothing uploaded yet.</div>}
+        {periods.map((p) => (
+          <div key={`${p.periodStart}-${p.periodEnd}`} style={{ padding: "12px 0", borderBottom: `1px solid ${C.line}` }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+              <div style={{ fontWeight: 600, fontSize: 14 }}>
+                {p.periodStart !== "?" ? new Date(p.periodStart).toLocaleDateString() : "Unknown start"} – {p.periodEnd !== "?" ? new Date(p.periodEnd).toLocaleDateString() : "Unknown end"}
+              </div>
+              <div style={{ fontSize: 11.5, color: C.sub }}>{p.batchCount} file{p.batchCount !== 1 ? "s" : ""} · {p.products.join(", ")}</div>
+            </div>
+            <div style={{ display: "flex", gap: 20, marginTop: 6, fontSize: 12.5 }}>
+              <span>Stake: <strong>{naira(p.totals.stake)}</strong></span>
+              <span>Commission: <strong>{naira(p.totals.commission)}</strong></span>
+              <span>Profit: <strong style={{ color: p.totals.profit < 0 ? C.brick : "inherit" }}>{naira(p.totals.profit)}</strong></span>
+              <span>Agents: <strong>{p.agentCount}</strong></span>
+            </div>
+          </div>
+        ))}
+      </Panel>
+    </>
+  );
+}
+
 function HistoryTab({ batches, removeBatch }) {
   return (
     <>

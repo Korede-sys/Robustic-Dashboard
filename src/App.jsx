@@ -405,6 +405,7 @@ export default function App() {
       <style>{`
         :root, [data-theme="light"] { ${themeVarsCSS(THEME_VARS.light)} }
         [data-theme="dark"] { ${themeVarsCSS(THEME_VARS.dark)} }
+        button, select, input, textarea { font-family: inherit; }
         input, select, textarea {
           background: ${C.panel}; color: ${C.ink}; border-color: ${C.line};
         }

@@ -60,6 +60,7 @@ export default function LoginScreen({ onSignedIn }) {
         @keyframes spin { to { transform: rotate(360deg); } } .lucide-loader-2 { animation: spin 0.8s linear infinite; }
         :root, [data-theme="light"] { ${themeVarsCSS(THEME_VARS.light)} }
         [data-theme="dark"] { ${themeVarsCSS(THEME_VARS.dark)} }
+        button, select, input, textarea { font-family: inherit; }
       `}</style>
 
       <button onClick={() => setThemeMode(m => m === "light" ? "dark" : "light")} title={themeMode === "light" ? "Switch to dark mode" : "Switch to light mode"} style={{

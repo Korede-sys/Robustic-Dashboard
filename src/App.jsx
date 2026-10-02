@@ -862,9 +862,33 @@ function OverviewTab({ agg, trends, series, hasData }) {
   const channels = channelBreakdown(agg.agents);
   const zeroCommissionOnline = agg.agents.filter(a => a.channel === "online" && (a.sourceCommission || 0) === 0).length;
   const trendTypes = series ? Object.keys(series).filter(t => series[t].length > 1) : [];
+  const summaryRow = {
+    stake: agg.totals.stake, payout: agg.totals.payout, profit: agg.totals.profit, commission: agg.totals.commission,
+    agentsWithActivity: agg.agents.length,
+    topState: topState ? topState.state : "—", topStateStake: topState ? topState.stake : 0,
+    topProduct: topProduct ? topProduct.name : "—", topProductStake: topProduct ? topProduct.stake : 0,
+    productsInLoss: lossProducts.map(p => p.name).join("; ") || "None",
+  };
+  for (const c of channels) summaryRow[`channel_${c.channel}_stake`] = c.stake;
+  const channelColumns = channels.map(c => ({ label: `${CHANNEL_LABELS[c.channel] || c.channel} stake`, get: () => c.stake }));
+
   return (
     <>
-      <h1 style={{ ...serif, fontSize: 28, fontWeight: 500, margin: "0 0 20px" }}>Overview</h1>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+        <h1 style={{ ...serif, fontSize: 28, fontWeight: 500, margin: 0 }}>Overview</h1>
+        <button onClick={() => downloadCSV("robustic_overview_summary.csv", [summaryRow], [
+          { label: "Total Stake", get: () => summaryRow.stake }, { label: "Total Payout", get: () => summaryRow.payout },
+          { label: "Net Profit", get: () => summaryRow.profit }, { label: "Commission (per sheet)", get: () => summaryRow.commission },
+          { label: "Agents With Activity", get: () => summaryRow.agentsWithActivity },
+          { label: "Top State", get: () => summaryRow.topState }, { label: "Top State Stake", get: () => summaryRow.topStateStake },
+          { label: "Top Product", get: () => summaryRow.topProduct }, { label: "Top Product Stake", get: () => summaryRow.topProductStake },
+          ...channelColumns,
+          { label: "Products In Loss", get: () => summaryRow.productsInLoss },
+        ])} style={{
+          display: "flex", alignItems: "center", gap: 6, border: `1px solid ${C.line}`, background: C.panel, borderRadius: 8,
+          padding: "7px 14px", fontSize: 12.5, fontWeight: 600, cursor: "pointer",
+        }}><Download size={13} /> Export CSV</button>
+      </div>
       <div className="kpi-row" style={{ display: "flex", gap: 14, marginBottom: 20 }}>
         <Kpi label="Total Stake" value={nairaShort(agg.totals.stake)} />
         <Kpi label="Total Payout" value={nairaShort(agg.totals.payout)} />

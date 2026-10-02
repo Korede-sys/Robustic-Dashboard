@@ -963,25 +963,90 @@ function ReportsTab({ batches, selectedKeys, setSelectedKeys, rules, adjustments
 
       <ReportFilters batches={batches} selectedKeys={selectedKeys} setSelectedKeys={setSelectedKeys} />
 
+      <div style={{ marginBottom: 16 }}>
+        <select
+          value={slicerProducts.size === 1 ? [...slicerProducts][0] : ""}
+          onChange={(e) => setSlicerProducts(e.target.value ? new Set([e.target.value]) : new Set())}
+          style={{
+            border: `1px solid ${C.line}`, background: C.panel, color: C.ink, borderRadius: 9,
+            padding: "9px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer", minWidth: 200,
+          }}>
+          <option value="">All products</option>
+          {dateOnlyAgg.products.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
+        </select>
+      </div>
+
       {(() => {
         const datedSelected = selectedBatches.filter(b => b.periodStart && b.periodEnd);
         const numDays = datedSelected.length
           ? Math.round((Math.max(...datedSelected.map(b => new Date(b.periodEnd))) - Math.min(...datedSelected.map(b => new Date(b.periodStart)))) / 86400000) + 1
           : 0;
         const avgDailySales = numDays > 0 ? agg.totals.stake / numDays : 0;
+        // Total Wins / Pending Payout only have real meaning for products
+        // whose raw file actually separates MoneyWin from MoneyPayout
+        // (confirmed for Luckyball/Luckygreek/Rocket Man; Globalbet/Sports
+        // don't have this split in any file seen so far). Showing a real
+        // number when it's real, and an honest "—" rather than a guessed
+        // zero when it isn't, matters here -- a silent 0 would read as
+        // "nothing pending" when the truth is "not tracked for this product."
+        const hasWinData = agg.totals.hasMoneyWinData;
+        const pendingPayout = hasWinData ? agg.totals.moneyWin - agg.totals.payout : null;
         return (
           <div className="kpi-row" style={{ display: "flex", gap: 14, marginBottom: 20, flexWrap: "wrap" }}>
-            <Kpi label="Total Stake" value={nairaShort(agg.totals.stake)} />
+            <Kpi label="Total Wins" value={hasWinData ? nairaShort(agg.totals.moneyWin) : nairaShort(agg.totals.payout)} />
             <Kpi label="Total Payout" value={nairaShort(agg.totals.payout)} />
+            <Kpi label="Pending Payout" value={hasWinData ? nairaShort(pendingPayout) : "—"} />
             <Kpi label="Net Profit" value={nairaShort(agg.totals.profit)} />
             <Kpi label="Commission" value={nairaShort(agg.totals.commission)} />
             <Kpi label="Avg Daily Sales" value={nairaShort(avgDailySales)} />
             <Kpi label="Number of Tickets" value={Math.round(agg.agents.reduce((s, a) => s + a.tickets, 0)).toLocaleString()} />
             <Kpi label="Number of Days" value={numDays} />
-            <Kpi label="Agents With Activity" value={agg.agents.length} />
           </div>
         );
       })()}
+
+      <Panel title="Report" right={
+        <button onClick={() => downloadCSV("robustic_sales_report.csv", agg.agents, [
+          { label: "S/N", get: (a) => a.rank }, { label: "AgentUsername", get: (a) => a.username },
+          { label: "NumberOfTickets", get: (a) => Math.round(a.tickets) }, { label: "MoneyIn", get: (a) => a.stake },
+          { label: "MoneyWin", get: (a) => a.hasMoneyWinData ? a.moneyWin : "" }, { label: "MoneyPayout", get: (a) => a.payout },
+          { label: "Profit", get: (a) => a.profit }, { label: "Commission", get: (a) => a.sourceCommission },
+          { label: "Type", get: (a) => a.commissionType || "" },
+        ])} style={{
+          display: "flex", alignItems: "center", gap: 6, border: `1px solid ${C.line}`, background: C.panel, borderRadius: 8,
+          padding: "7px 14px", fontSize: 12.5, fontWeight: 600, cursor: "pointer",
+        }}><Download size={13} /> Export CSV</button>
+      }>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 820 }}>
+            <thead>
+              <tr>
+                {["S/N", "AgentUsername", "NumberOfTickets", "MoneyIn", "MoneyWin", "MoneyPayout", "Profit", "Commission", "Type"].map(h => (
+                  <th key={h} style={{ textAlign: h === "AgentUsername" || h === "Type" ? "left" : "right", padding: "8px 10px" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {agg.agents.slice(0, 200).map((a) => (
+                <tr key={a.username} style={{ borderTop: `1px solid ${C.line}` }}>
+                  <td style={{ padding: "8px 10px", textAlign: "right", ...nums }}>{a.rank}</td>
+                  <td style={{ padding: "8px 10px", ...mono }}>{a.username}</td>
+                  <td style={{ padding: "8px 10px", textAlign: "right", ...nums }}>{Math.round(a.tickets).toLocaleString()}</td>
+                  <td style={{ padding: "8px 10px", textAlign: "right", ...nums }}>{naira(a.stake)}</td>
+                  <td style={{ padding: "8px 10px", textAlign: "right", ...nums, color: a.hasMoneyWinData ? "inherit" : C.sub }}>{a.hasMoneyWinData ? naira(a.moneyWin) : "—"}</td>
+                  <td style={{ padding: "8px 10px", textAlign: "right", ...nums }}>{naira(a.payout)}</td>
+                  <td style={{ padding: "8px 10px", textAlign: "right", ...nums, color: a.profit < 0 ? C.brick : C.emerald }}>{naira(a.profit)}</td>
+                  <td style={{ padding: "8px 10px", textAlign: "right", ...nums }}>{naira(a.sourceCommission)}</td>
+                  <td style={{ padding: "8px 10px" }}>{a.commissionType || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {agg.agents.length > 200 && (
+            <div style={{ fontSize: 12, color: C.sub, padding: "10px 2px" }}>Showing first 200 of {agg.agents.length} agents — use Export CSV for the full list.</div>
+          )}
+        </div>
+      </Panel>
 
       <Panel>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: filtersExpanded ? 14 : (activeSlicerCount > 0 ? 10 : 0) }}>

@@ -343,10 +343,19 @@ function parseGBLegacyTiered(rows) {
 
 function parseEB(rows) {
   const items = [], supplemental = [];
+  // moneyWin (the raw "MoneyWin" column, one before "payout"/"MoneyPayout")
+  // is captured so Reports can show a real Total Wins vs. Total Payout vs.
+  // Pending Payout split -- confirmed against real per-agent rows: the two
+  // are usually identical, but genuinely differ for some agents (a real,
+  // not-yet-settled difference), so this is an honest figure, not a
+  // fabricated split. Only wired up for these three products because
+  // that's what was actually verified; Globalbet/Sports don't get a
+  // moneyWin field here and fall back to "not available" rather than a
+  // guessed number.
   const blocks = [
-    ["LUCKYBALL", { username: 1, tickets: 2, stake: 3, payout: 5, profit: 6, commission: 7, type: 8 }],
-    ["LUCKYGREECK", { username: 13, tickets: 14, stake: 15, payout: 17, profit: 18, commission: 19, bonus: 20, balance: 21, type: 23 }],
-    ["ROCKET_MAN", { username: 27, tickets: 28, stake: 29, payout: 31, profit: 32, commission: 33, type: 34 }],
+    ["LUCKYBALL", { username: 1, tickets: 2, stake: 3, moneyWin: 4, payout: 5, profit: 6, commission: 7, type: 8 }],
+    ["LUCKYGREECK", { username: 13, tickets: 14, stake: 15, moneyWin: 16, payout: 17, profit: 18, commission: 19, bonus: 20, balance: 21, type: 23 }],
+    ["ROCKET_MAN", { username: 27, tickets: 28, stake: 29, moneyWin: 30, payout: 31, profit: 32, commission: 33, type: 34 }],
     ["LUCKYBALL_DUP", { username: 36, tickets: 37, stake: 38, payout: 40, profit: 41, commission: 42 }],
     ["LUCKYGREECK_DUP", { username: 45, tickets: 46, stake: 47, payout: 49, profit: 50, commission: 51 }],
     ["ROCKET_MAN_DUP", { username: 54, tickets: 55, stake: 56, payout: 58, profit: 59, commission: 60 }],
@@ -360,6 +369,7 @@ function parseEB(rows) {
         agentUsername: u, sourceBlock: `EB:${label}`,
         tickets: money(get(row, cols.tickets)), stake: money(get(row, cols.stake)),
         payout: money(get(row, cols.payout)), profit: money(get(row, cols.profit)),
+        moneyWin: cols.moneyWin !== undefined ? money(get(row, cols.moneyWin)) : null,
         commissionAmount: money(get(row, cols.commission)),
         commissionType: cols.type !== undefined ? (String(get(row, cols.type)).trim() || null) : null,
         balance: cols.balance !== undefined ? money(get(row, cols.balance)) : null,
@@ -632,12 +642,14 @@ function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES, adjustments
           tickets: 0, stake: 0, payout: 0, profit: 0, sourceCommission: 0, calcCommission: 0,
           monthlyBonus: 0, bonus: 0, palliative: 0, gift: 0, products: new Set(), allVerified: true, hasOverride: false, hasAdjustment: false,
           totalEarnings: null, balance: null, avgStake: null, onFortyPercentPlan: fortyPercentAgents.has(key),
-          onNoSupplementalPlan: noSupplementalAgents.has(key),
+          onNoSupplementalPlan: noSupplementalAgents.has(key), moneyWin: 0, hasMoneyWinData: false, commissionType: null,
         });
       }
       const a = agentMap.get(key);
       a.tickets += item.tickets || 0; a.stake += item.stake || 0; a.payout += item.payout || 0;
       a.profit += item.profit || 0; a.sourceCommission += payableCommission;
+      if (item.moneyWin !== null && item.moneyWin !== undefined) { a.moneyWin += item.moneyWin; a.hasMoneyWinData = true; }
+      if (item.commissionType) a.commissionType = item.commissionType;
       a.calcCommission += calc || 0;
       if (verified === false && !isOverride && !adjustment) a.allVerified = false;
       if (isOverride) a.hasOverride = true;
@@ -716,6 +728,8 @@ function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES, adjustments
       stake: agents.reduce((s, a) => s + a.stake, 0), payout: agents.reduce((s, a) => s + a.payout, 0),
       profit: agents.reduce((s, a) => s + a.profit, 0), commission: agents.reduce((s, a) => s + a.sourceCommission, 0),
       monthlyBonus: agents.reduce((s, a) => s + a.monthlyBonus, 0),
+      moneyWin: agents.reduce((s, a) => s + a.moneyWin, 0),
+      hasMoneyWinData: agents.some(a => a.hasMoneyWinData),
     },
   };
 }

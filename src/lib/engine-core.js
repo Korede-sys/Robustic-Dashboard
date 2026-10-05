@@ -103,13 +103,22 @@ function decodeAgent(username) {
   }
   return { username, onboardedMonth: null, stateCode: null, stateName: "Unknown", branchCode: null, channel: "unknown" };
 }
+// Cashier-style usernames (e.g. "gokana-cashier1") carry no state/branch code of
+// their own; Xpool gives their parent, so state and channel are read from that.
+function decodeItemAgent(item) {
+  const own = decodeAgent(item.agentUsername);
+  return own.channel === "unknown" && item.parentUsername ? decodeAgent(item.parentUsername) : own;
+}
 function isHouseAgent(username) {
   return decodeAgent(username).channel === "unknown";
 }
 
 /* ============================================================ file type detection */
-function detectFileType(filename) {
+function detectFileType(filename, headText) {
   const f = filename.toLowerCase();
+  // The Xpool "Agent Breakdown" export is named after the report, not the
+  // product, so it's recognised by its header row instead.
+  if (headText && /^"?Agent"?\s*,\s*"?Depth"?\s*,\s*"?Scope"?\s*,\s*"?Parent"?\s*,\s*"?Bets"?/i.test(String(headText).replace(/^\uFEFF/, "").trim())) return "XP";
   if (f.includes("globalbet")) return "GB";
   if ((f.includes("sport_monthly_bonus") || f.includes("sp_mb")) ) return "SP_MB";
   if (f.includes("monthly_bonus") && (f.includes("eb_mb") || f.includes("luckyball"))) return "EB_MB";
@@ -472,7 +481,63 @@ function parseSPMB(rows) {
   return { items, supplemental };
 }
 
-const PARSERS = { GB: parseGB, EB: parseEB, EB_MB: parseEBMB, SP: parseSP, SP_MB: parseSPMB };
+// Xpool "Agent Breakdown" export. It is a HIERARCHY, not a flat list, so it must
+// not be summed row by row: "subtree" rows are roll-ups (a parent's own sales
+// PLUS all its children), "own (direct)" rows are the parent's own sales, and
+// "own" rows are individual agents or cashier accounts. Taking every row
+// except "subtree" gives each agent's own sales exactly once -- verified
+// against a real export: it reproduces Xpool's on-screen totals to the naira
+// (1,758 bets, 2,081,726 stake, 279,257.65 commission), while summing all
+// rows overstates stake by about 74%. Per agent only (owner-confirmed): no
+// parent/child rollup. Cashier accounts are kept under their own username,
+// as Xpool reports them, with the parent recorded for later.
+function parseXP(rows) {
+  const header = (rows[0] || []).map(h => String(h).replace(/^\uFEFF/, "").trim().toLowerCase());
+  const col = (name) => header.indexOf(name);
+  const c = { agent: col("agent"), depth: col("depth"), scope: col("scope"), parent: col("parent"), bets: col("bets"),
+    stake: col("stake"), payout: col("payout"), gross: col("gross profit"), comm: col("commission") };
+  const missing = Object.entries(c).filter(([, i]) => i < 0).map(([k]) => k);
+  if (missing.length) throw new Error(`This doesn't look like an Xpool Agent Breakdown export -- missing column(s): ${missing.join(", ")}.`);
+  const num = (v) => { const n = Number(String(v ?? "").trim()); return Number.isFinite(n) ? n : 0; };
+  const r2 = (n) => Math.round(n * 100) / 100;
+
+  const items = [];
+  let ownStake = 0, topStake = 0, ownBets = 0, topBets = 0;
+  for (const row of rows.slice(1)) {
+    const name = String(row[c.agent] ?? "").trim();
+    if (!name) continue;
+    const scope = String(row[c.scope] ?? "").trim().toLowerCase();
+    const depth = num(row[c.depth]);
+    const parent = String(row[c.parent] ?? "").trim();
+    if (depth === 0) { topStake += num(row[c.stake]); topBets += num(row[c.bets]); }
+    if (scope === "subtree") continue; // roll-up rows would double-count
+    let agent = name, sourceAgent = null;
+    if (scope === "own (direct)") { const m = /^Own sales \((.+)\)$/i.exec(name); agent = m ? m[1].trim() : parent; }
+    else if (depth === 0 && scope === "own" && parent && parent.toLowerCase() !== name.toLowerCase() && /-cashier\d+$/i.test(name)) {
+      // Owner decision: a cashier account's sales belong to its parent agent.
+      // The original username is kept (sourceAgentUsername) so the roll-up can
+      // always be traced back to exactly what Xpool reported.
+      agent = parent; sourceAgent = name;
+    }
+    ownStake += num(row[c.stake]); ownBets += num(row[c.bets]);
+    items.push({
+      agentUsername: agent, sourceAgentUsername: sourceAgent,
+      parentUsername: parent && parent.toLowerCase() !== agent.toLowerCase() ? parent : null,
+      sourceBlock: "XP:OWN", tickets: num(row[c.bets]), stake: r2(num(row[c.stake])), payout: r2(num(row[c.payout])),
+      profit: r2(num(row[c.gross])), commissionAmount: r2(num(row[c.comm])), commissionType: null, balance: null,
+      moneyWin: null, isHouse: false, // cashier usernames don't match the agent pattern, but they are not "house"
+    });
+  }
+  // Integrity guard: the agents we kept must add up to the file's own top-level
+  // rows. If they don't, the export isn't shaped the way this parser assumes,
+  // and importing it would silently misreport sales -- so refuse instead.
+  if (Math.abs(ownStake - topStake) > 0.5 || Math.abs(ownBets - topBets) > 0.5) {
+    throw new Error(`This Xpool export doesn't reconcile: per-agent rows total stake ${ownStake} / ${ownBets} bets, but its top-level rows total ${topStake} / ${topBets}. Not imported, to avoid misreporting.`);
+  }
+  return { items, supplemental: [] };
+}
+
+const PARSERS = { GB: parseGB, EB: parseEB, EB_MB: parseEBMB, SP: parseSP, SP_MB: parseSPMB, XP: parseXP };
 
 /* ============================================================ commission engine
    Formulas below were empirically confirmed against your real August/September
@@ -491,7 +556,14 @@ const STRUCTURALLY_TRUSTED = new Set([
   "SP:35PCT", "SP:UP30PCT", "SP:3RD_PARTY", "SP:POOL",
   "GB:BLOCK_A", "GB:FIN_OVERVIEW",
   "SP_MB:BASE",
+  "XP:OWN",
 ]);
+// Blocks whose commission the SOURCE backoffice calculates AND pays itself
+// (Xpool, confirmed by the owner). That commission is reported, not payable
+// by us: it's tracked separately (reportedCommission), never added to payable
+// commission totals, and never put through our commission verification. Keyed
+// on the block name because that's what survives a save and reload.
+const PAID_BY_SOURCE_BLOCKS = new Set(["XP:OWN"]);
 const EXCLUDED_BLOCKS = new Set([
   "SP:BASE", "EB:LUCKYBALL_DUP", "EB:LUCKYGREECK_DUP", "EB:ROCKET_MAN_DUP", "EB:COMBINED_TOTAL",
 ]);
@@ -541,6 +613,7 @@ function productOf(block) {
   if (block === "EB_MB:BASE") return "Luckyball (Monthly)";
   if (block.startsWith("SP_MB:")) return "Sports (Monthly)";
   if (block.startsWith("SP:")) return "Sports";
+  if (block.startsWith("XP:")) return "Xpool";
   return "Other";
 }
 function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES, adjustments = [], fortyPercentAgents = new Set(), noSupplementalAgents = new Set()) {
@@ -551,7 +624,7 @@ function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES, adjustments
   const appliedAdjustments = [];
   const adjustmentMap = new Map();
   for (const adj of adjustments) adjustmentMap.set(adjustmentKey(adj.batchId, adj.agentUsername, adj.sourceBlock), adj);
-  let verifiedCount = 0, unverifiedCount = 0, mismatchCount = 0, overrideCount = 0, adjustedCount = 0;
+  let verifiedCount = 0, unverifiedCount = 0, mismatchCount = 0, overrideCount = 0, adjustedCount = 0, reportedOnlyCount = 0;
 
   const PRODUCT_OF = productOf;
 
@@ -577,9 +650,15 @@ function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES, adjustments
       if (EXCLUDED_BLOCKS.has(item.sourceBlock) || !STRUCTURALLY_TRUSTED.has(item.sourceBlock)) continue;
       if (item.isHouse) continue;
       if (item.sourceBlock === "GB:FIN_OVERVIEW" && legacyCoveredGBAgents.has(item.agentUsername.toLowerCase())) continue;
-      const meta = decodeAgent(item.agentUsername);
+      const meta = decodeItemAgent(item);
       let calc, confidence, verified, diff, diffPct, isOverride;
-      if (meta.channel === "online") {
+      if (PAID_BY_SOURCE_BLOCKS.has(item.sourceBlock)) {
+        // The source backoffice calculates and pays this commission itself, so
+        // there's nothing here for us to verify or to pay.
+        calc = item.commissionAmount;
+        confidence = "paid by the source backoffice -- reported, not verified or payable here";
+        verified = null; diff = undefined; diffPct = undefined; isOverride = false;
+      } else if (meta.channel === "online") {
         // Business rule, confirmed directly, not something a rate formula can express:
         // online-channel (elb-) agents are never paid commission on this product,
         // regardless of their stake or profit. So there's nothing to cross-check
@@ -618,7 +697,8 @@ function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES, adjustments
       // to other products.
       const isFortyPercentPlan = fortyPercentAgents.has(item.agentUsername.toLowerCase())
         && (item.sourceBlock === "GB:BLOCK_A" || item.sourceBlock === "GB:FIN_OVERVIEW") && !adjustment;
-      const payableCommission = adjustment ? adjustment.adjustedCommission
+      const paidBySource = PAID_BY_SOURCE_BLOCKS.has(item.sourceBlock);
+      const payableCommission = paidBySource ? 0 : adjustment ? adjustment.adjustedCommission
         : isOnlinePolicyZero ? 0
         : isFortyPercentPlan ? Math.max(0, 0.40 * (item.profit || 0))
         : isOverride ? calc : (item.commissionAmount || 0);
@@ -633,6 +713,7 @@ function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES, adjustments
       else if (isOverride) overrideCount++;
       else if (verified === true) verifiedCount++;
       else if (verified === false) { mismatchCount++; mismatches.push({ agent: item.agentUsername, block: item.sourceBlock, type: item.commissionType, source: item.commissionAmount, calculated: calc, diff, diffPct, batch: batch.filename, batchId: batch.id }); }
+      else if (paidBySource) reportedOnlyCount++;
       else unverifiedCount++;
 
       const key = item.agentUsername.toLowerCase();
@@ -642,12 +723,13 @@ function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES, adjustments
           tickets: 0, stake: 0, payout: 0, profit: 0, sourceCommission: 0, calcCommission: 0,
           monthlyBonus: 0, bonus: 0, palliative: 0, gift: 0, products: new Set(), allVerified: true, hasOverride: false, hasAdjustment: false,
           totalEarnings: null, balance: null, avgStake: null, onFortyPercentPlan: fortyPercentAgents.has(key),
-          onNoSupplementalPlan: noSupplementalAgents.has(key), moneyWin: 0, hasMoneyWinData: false, commissionType: null,
+          onNoSupplementalPlan: noSupplementalAgents.has(key), moneyWin: 0, hasMoneyWinData: false, commissionType: null, reportedCommission: 0,
         });
       }
       const a = agentMap.get(key);
       a.tickets += item.tickets || 0; a.stake += item.stake || 0; a.payout += item.payout || 0;
       a.profit += item.profit || 0; a.sourceCommission += payableCommission;
+      if (paidBySource) a.reportedCommission += item.commissionAmount || 0;
       if (item.moneyWin !== null && item.moneyWin !== undefined) { a.moneyWin += item.moneyWin; a.hasMoneyWinData = true; }
       if (item.commissionType) a.commissionType = item.commissionType;
       a.calcCommission += calc || 0;
@@ -723,13 +805,14 @@ function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES, adjustments
 
   return {
     agents, products, states, mismatches, adjustments: appliedAdjustments,
-    stats: { verifiedCount, unverifiedCount, mismatchCount, overrideCount, adjustedCount },
+    stats: { verifiedCount, unverifiedCount, mismatchCount, overrideCount, adjustedCount, reportedOnlyCount },
     totals: {
       stake: agents.reduce((s, a) => s + a.stake, 0), payout: agents.reduce((s, a) => s + a.payout, 0),
       profit: agents.reduce((s, a) => s + a.profit, 0), commission: agents.reduce((s, a) => s + a.sourceCommission, 0),
       monthlyBonus: agents.reduce((s, a) => s + a.monthlyBonus, 0),
       moneyWin: agents.reduce((s, a) => s + a.moneyWin, 0),
       hasMoneyWinData: agents.some(a => a.hasMoneyWinData),
+      reportedCommission: agents.reduce((s, a) => s + a.reportedCommission, 0),
     },
   };
 }

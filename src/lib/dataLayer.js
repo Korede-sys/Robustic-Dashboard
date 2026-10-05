@@ -1,4 +1,6 @@
 import { supabase } from "./supabaseClient";
+import { SOURCE_BY_TYPE, isMissingColumnError } from "./sources";
+import { productOf } from "./engine-core";
 
 /* ============================================================ auth */
 export async function signIn(email, password) {
@@ -42,11 +44,17 @@ function itemToDb(item, batchId) {
     tickets: item.tickets, stake: item.stake, payout: item.payout, profit: item.profit,
     commission_amount: item.commissionAmount, commission_type: item.commissionType,
     balance: item.balance, is_house: item.isHouse,
+    ...(item.parentUsername ? { parent_username: item.parentUsername } : {}), // only Xpool rows carry one
+    ...(item.moneyWin !== null && item.moneyWin !== undefined ? { money_win: item.moneyWin } : {}), // only Elbet products carry one
+    ...(item.sourceAgentUsername ? { source_agent_username: item.sourceAgentUsername } : {}), // only rolled-up Xpool cashier rows
   };
 }
 function itemFromDb(row) {
   return {
     agentUsername: row.agent_username, sourceBlock: row.source_block,
+    parentUsername: row.parent_username || null,
+    sourceAgentUsername: row.source_agent_username || null,
+    moneyWin: row.money_win === null || row.money_win === undefined ? null : Number(row.money_win),
     tickets: row.tickets === null ? null : Number(row.tickets),
     stake: row.stake === null ? null : Number(row.stake),
     payout: row.payout === null ? null : Number(row.payout),
@@ -93,21 +101,77 @@ async function insertChunked(table, rows) {
 }
 
 export async function saveBatch(batch, userId) {
-  const { data: batchRow, error } = await supabase
-    .from("batches")
-    .insert({
-      type: batch.type, filename: batch.filename, uploaded_by: userId,
-      period_start: batch.periodStart || null, period_end: batch.periodEnd || null,
-    })
-    .select()
-    .single();
+  const base = {
+    type: batch.type, filename: batch.filename, uploaded_by: userId,
+    period_start: batch.periodStart || null, period_end: batch.periodEnd || null,
+  };
+  // Provenance: where this data came from and how. For a file export the
+  // closest thing to a source record id is the filename. If the provenance
+  // migration (schema_v9) hasn't been run, retry with the original columns
+  // only -- uploads must never break because of an optional upgrade.
+  const sourceSystem = SOURCE_BY_TYPE[batch.type] || null;
+  const provenance = {
+    source_system: sourceSystem, integration_type: "csv_upload",
+    source_record_id: batch.filename, synced_at: new Date().toISOString(),
+  };
+  let provenanceApplied = true;
+  let { data: batchRow, error } = await supabase.from("batches").insert({ ...base, ...provenance }).select().single();
+  if (error && isMissingColumnError(error)) {
+    provenanceApplied = false; // schema_v9 not run yet: fall back to the original columns
+    ({ data: batchRow, error } = await supabase.from("batches").insert(base).select().single());
+  }
+  if (error && error.code === "23514" && batch.type === "XP") {
+    throw new Error("Xpool uploads need schema_v10_xpool.sql to be run in Supabase first. Nothing was saved.");
+  }
   if (error) throw error;
 
-  await insertChunked("line_items", batch.items.map(i => itemToDb(i, batchRow.id)));
+  // Product is its own dimension, separate from the backoffice. Only written
+  // when the same migration that added the column is known to be in place
+  // (the batches insert above just proved it), so older databases still work.
+  const itemRows = batch.items.map(i => (
+    provenanceApplied ? { ...itemToDb(i, batchRow.id), product: productOf(i.sourceBlock) } : itemToDb(i, batchRow.id)
+  ));
+  try {
+    await insertChunked("line_items", itemRows);
+  } catch (e) {
+    // money_win / parent_username come from migration 10. If it hasn't been run,
+    // save everything else rather than fail the whole upload (the first chunk
+    // is what fails, so nothing is half-written).
+    if (!isMissingColumnError(e)) throw e;
+    await insertChunked("line_items", itemRows.map(({ money_win, parent_username, source_agent_username, ...rest }) => rest));
+  }
   if (batch.supplemental.length > 0) {
     await insertChunked("supplemental_payments", batch.supplemental.map(s => suppToDb(s, batchRow.id)));
   }
-  return { ...batch, id: batchRow.id, uploadedAt: batchRow.uploaded_at, periodStart: batchRow.period_start, periodEnd: batchRow.period_end };
+  await recordUploadSyncRun(sourceSystem, batch.items.length + batch.supplemental.length);
+  return {
+    ...batch, id: batchRow.id, uploadedAt: batchRow.uploaded_at, periodStart: batchRow.period_start, periodEnd: batchRow.period_end,
+    sourceSystem: batchRow.source_system || sourceSystem,
+  };
+}
+
+// A manual upload IS a (manual) synchronization -- recording it gives the
+// Data Sources page a real "last successful sync". Best-effort: the table
+// only exists after schema_v9, and a failure here must never fail the upload.
+async function recordUploadSyncRun(sourceId, recordCount) {
+  if (!sourceId) return;
+  try {
+    await supabase.from("sync_runs").insert({
+      source_id: sourceId, mode: "manual", status: "succeeded", finished_at: new Date().toISOString(),
+      records_seen: recordCount, records_inserted: recordCount, records_updated: 0, records_skipped: 0,
+    });
+  } catch (e) { /* non-critical */ }
+}
+
+// Both return null/[] (not throw) when schema_v9 hasn't been run, so the UI
+// can fall back to the built-in source list.
+export async function loadDataSources() {
+  const { data, error } = await supabase.from("data_sources").select("*").order("name");
+  return error ? null : data;
+}
+export async function loadSyncRuns(limit = 200) {
+  const { data, error } = await supabase.from("sync_runs").select("*").order("started_at", { ascending: false }).limit(limit);
+  return error ? [] : data;
 }
 
 export async function loadAllBatches() {
@@ -129,6 +193,7 @@ export async function loadAllBatches() {
 
   return batchRows.map(b => ({
     id: b.id, type: b.type, filename: b.filename, uploadedAt: b.uploaded_at,
+    sourceSystem: b.source_system || SOURCE_BY_TYPE[b.type] || null,
     // Old batches from before this feature have no period saved -- fall back to
     // the upload date so sorting/filtering still works, just less precisely.
     periodStart: b.period_start || b.uploaded_at?.slice(0, 10) || null,

@@ -7,7 +7,7 @@ import {
   FileSpreadsheet, History as HistoryIcon, BookOpen, X, Loader2, Trash2, LayoutGrid,
   Users, Package, MapPin, Search, ArrowUp, ArrowDown, Minus, Phone, ClipboardList, TrendingUp, TrendingDown, Check, LogOut, UserCog,
   Sliders, Activity as ActivityIcon, Eye, ChevronDown, Moon, Sun,
-  BarChart3, Calendar, Scale, Lightbulb, CreditCard, PhoneOff, Store,
+  BarChart3, Calendar, Scale, Lightbulb, CreditCard, PhoneOff, Database, Store,
 } from "lucide-react";
 
 import {
@@ -23,7 +23,10 @@ import {
   loadCommissionRules, updateCommissionRule, addCommissionRule, logActivity, loadActivityLog,
   loadAllAdjustments, addManualAdjustment, deleteManualAdjustment,
   loadAgentCommissionPlans, setAgentCommissionPlan, removeAgentCommissionPlan,
+  loadDataSources, loadSyncRuns,
 } from "./lib/dataLayer";
+import { SOURCES, filterBatchesBySource, sourceOfBatch } from "./lib/sources";
+import DataSourcesPage from "./DataSourcesPage";
 import LoginScreen from "./LoginScreen";
 
 /* ============================================================ design tokens */
@@ -200,6 +203,7 @@ const ALL_NAV = [
   { id: "formulas", label: "Formulas", icon: BookOpen, action: "view_reports", section: "Finance" },
   { id: "activity", label: "Activity", icon: Scale, action: "view_reports", section: "Admin" },
   { id: "users", label: "Team", icon: UserCog, action: "manage_users", section: "Admin" },
+  { id: "datasources", label: "Data Sources", icon: Database, action: "view_reports", section: "Admin" },
 ];
 
 export default function App() {
@@ -232,6 +236,9 @@ export default function App() {
   const [activityLog, setActivityLog] = useState([]);
   const [adjustments, setAdjustments] = useState([]);
   const [agentPlans, setAgentPlans] = useState([]);
+  const [sourceSel, setSourceSel] = useState("all");
+  const [dataSources, setDataSources] = useState(null); // null = schema_v9 not run yet -> built-in list
+  const [syncRuns, setSyncRuns] = useState([]);
   const fileInputRef = useRef(null);
 
   // ---- auth: check session on load, react to sign-in/out ----
@@ -255,7 +262,7 @@ export default function App() {
     if (!session) return;
     (async () => {
       setLoading(true);
-      const [loadedBatches, loadedInterventions, ruleData, loadedActivity, loadedAdjustments, loadedAgentPlans] = await Promise.all([
+      const [loadedBatches, loadedInterventions, ruleData, loadedActivity, loadedAdjustments, loadedAgentPlans, loadedSources, loadedRuns] = await Promise.all([
         loadAllBatches(),
         can(profile?.role, "manage_followups") ? loadAllInterventions() : Promise.resolve([]),
         // These tables are added by later migrations. If a migration hasn't been
@@ -267,6 +274,8 @@ export default function App() {
         loadActivityLog().catch(() => []),
         loadAllAdjustments().catch(() => []),
         loadAgentCommissionPlans().catch(() => []),
+        loadDataSources().catch(() => null),
+        loadSyncRuns().catch(() => []),
       ]);
       setBatches(loadedBatches);
       setSelectedKeys(new Set(loadedBatches.map(b => b.id)));
@@ -276,12 +285,17 @@ export default function App() {
       setActivityLog(loadedActivity);
       setAdjustments(loadedAdjustments);
       setAgentPlans(loadedAgentPlans);
+      setDataSources(loadedSources);
+      setSyncRuns(loadedRuns);
       setLoading(false);
     })();
   }, [session, profile?.role]);
 
   async function refreshActivity() {
     try { setActivityLog(await loadActivityLog()); } catch (e) { /* non-critical */ }
+  }
+  async function refreshSyncRuns() {
+    try { setSyncRuns(await loadSyncRuns()); } catch (e) { /* non-critical */ }
   }
   async function refreshAgentPlans() {
     try { setAgentPlans(await loadAgentCommissionPlans()); } catch (e) { /* non-critical */ }
@@ -299,7 +313,10 @@ export default function App() {
       if (!pf.detectedType) continue;
       const text = await pf.file.text();
       const rows = parseCSV(text);
-      const { items, supplemental } = PARSERS[pf.detectedType](rows);
+      let parsed;
+      try { parsed = PARSERS[pf.detectedType](rows); }
+      catch (e) { setProcessing(false); window.alert(`${pf.name}: ${e.message}`); return; }
+      const { items, supplemental } = parsed;
       const period = detectPeriod(pf.name, pf.detectedType, rows);
       parsedBatches.push({
         type: pf.detectedType, filename: pf.name, items, supplemental,
@@ -325,10 +342,17 @@ export default function App() {
     if (!previewData) return;
     setProcessing(true);
     const newBatches = [];
-    for (const batch of previewData.parsedBatches) {
-      const saved = await saveBatch(batch, session.user.id);
-      newBatches.push(saved);
-      await logActivity("upload", `Uploaded ${batch.filename} (${batch.items.length} rows)`, session.user.id);
+    try {
+      for (const batch of previewData.parsedBatches) {
+        const saved = await saveBatch(batch, session.user.id);
+        newBatches.push(saved);
+        await logActivity("upload", `Uploaded ${batch.filename} (${batch.items.length} rows)`, session.user.id);
+      }
+    } catch (e) {
+      // A failed save must be visible, not leave the screen stuck on "processing".
+      setProcessing(false);
+      window.alert(`Couldn't save: ${e.message || e}`);
+      return;
     }
     setBatches(prev => {
       const merged = [...prev, ...newBatches];
@@ -346,9 +370,13 @@ export default function App() {
     setPreviewData(null);
   }
 
-  const handleFiles = useCallback((fileList) => {
-    const files = Array.from(fileList).map(f => ({
-      file: f, name: f.name, detectedType: detectFileType(f.name), status: "pending",
+  const handleFiles = useCallback(async (fileList) => {
+    // Filename decides the type for every existing product. The Xpool export is
+    // named after the report, not the product, so its header row is read too.
+    const files = await Promise.all(Array.from(fileList).map(async (f) => {
+      let head = "";
+      try { head = await f.slice(0, 600).text(); } catch (e) { /* unreadable: fall back to the filename */ }
+      return { file: f, name: f.name, detectedType: detectFileType(f.name, head), status: "pending" };
     }));
     setPendingFiles(prev => [...prev, ...files]);
   }, []);
@@ -398,13 +426,20 @@ export default function App() {
     if (!group) { group = { section: item.section, items: [] }; NAV_SECTIONS.push(group); }
     group.items.push(item);
   }
-  const selectedBatches = batches.filter(b => selectedKeys.has(b.id));
+  // Global Backoffice selector: reports read from visibleBatches. Backoffice
+  // and Product are SEPARATE dimensions -- this narrows by backoffice only; the
+  // existing product/state/channel filters on Reports then apply on top of it
+  // (e.g. Backoffice: Elbet + Product: Luckygreek). History/Upload deliberately
+  // keep using ALL batches.
+  const sourceDef = SOURCES.find(s => s.id === sourceSel);
+  const visibleBatches = filterBatchesBySource(batches, sourceSel);
+  const selectedBatches = visibleBatches.filter(b => selectedKeys.has(b.id));
   const fortyPercentAgents = new Set(agentPlans.filter(p => p.plan === "forty_percent_profit").map(p => p.agentUsername.toLowerCase()));
   const noSupplementalAgents = new Set(agentPlans.filter(p => p.plan === "no_supplemental_pay").map(p => p.agentUsername.toLowerCase()));
   const agg = aggregateBatches(selectedBatches, rules, adjustments, fortyPercentAgents, noSupplementalAgents);
-  const trends = computeTrends(batches);
-  const series = computeBatchSeries(batches);
-  const { inactive: inactiveList, dropped: droppedList } = computeInactiveAndDropAgents(batches);
+  const trends = computeTrends(visibleBatches);
+  const series = computeBatchSeries(visibleBatches);
+  const { inactive: inactiveList, dropped: droppedList } = computeInactiveAndDropAgents(visibleBatches);
 
   return (
     <div data-theme={themeMode} style={{ background: C.paper, color: C.ink, minHeight: "100vh", display: "flex", ...sans }}>
@@ -517,7 +552,19 @@ export default function App() {
             {(NAV_SECTIONS.find(g => g.items.some(n => n.id === tab)) || {}).section}
             {" "}<span style={{ color: C.ink, fontWeight: 600 }}>/ {(ALL_NAV.find(n => n.id === tab) || {}).label}</span>
           </div>
-          <div style={{ fontSize: 11.5, color: C.sub }}>{batches.length} file{batches.length !== 1 ? "s" : ""} uploaded</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <select value={sourceSel} onChange={(e) => setSourceSel(e.target.value)} title="Backoffice (data source). Combine with the Product filter on Reports."
+              style={{ border: `1px solid ${C.line}`, background: C.paper, color: C.ink, borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+              <option value="all">All Backoffices</option>
+              {SOURCES.map(s => {
+                const hasData = batches.some(b => sourceOfBatch(b) === s.id);
+                return <option key={s.id} value={s.id}>{s.name}{hasData ? "" : " (no data)"}</option>;
+              })}
+            </select>
+            <div style={{ fontSize: 11.5, color: C.sub }}>
+              {sourceSel === "all" ? `${batches.length} file${batches.length !== 1 ? "s" : ""} uploaded` : `${visibleBatches.length} of ${batches.length} files`}
+            </div>
+          </div>
         </div>
 
         <div style={{ flex: 1, padding: "26px 32px", maxWidth: 1520, width: "100%", boxSizing: "border-box" }}>
@@ -527,16 +574,21 @@ export default function App() {
           </div>
         ) : (
           <>
+            {sourceSel !== "all" && visibleBatches.length === 0 && ["reports", "insights", "weeks", "shopgroups", "lowactivity", "inactive", "dropinsales", "export"].includes(tab) && (
+              <div style={{ border: `1px solid ${C.line}`, borderLeft: `3px solid ${C.amber}`, background: C.panel, borderRadius: 8, padding: "12px 16px", marginBottom: 18, fontSize: 13, lineHeight: 1.5 }}>
+                <strong>No data for {(sourceDef || {}).name}.</strong> {(sourceDef || {}).note} Switch to "All Backoffices" to see everything.
+              </div>
+            )}
             {tab === "upload" && can(profile.role, "upload") && (
               <UploadTab pendingFiles={pendingFiles} setPendingFiles={setPendingFiles} handleFiles={handleFiles}
                 parseAllPending={parseAllPending} confirmSave={confirmSave} cancelPreview={cancelPreview}
                 previewData={previewData} setPreviewData={setPreviewData} processing={processing} fileInputRef={fileInputRef} hasHistory={batches.length > 0} />
             )}
-            {(tab === "lowactivity" || tab === "export") && batches.length > 0 && (
-              <ReportFilters batches={batches} selectedKeys={selectedKeys} setSelectedKeys={setSelectedKeys} />
+            {(tab === "lowactivity" || tab === "export") && visibleBatches.length > 0 && (
+              <ReportFilters batches={visibleBatches} selectedKeys={selectedKeys} setSelectedKeys={setSelectedKeys} />
             )}
             {tab === "reports" && (
-              <ReportsTab batches={batches} selectedKeys={selectedKeys} setSelectedKeys={setSelectedKeys}
+              <ReportsTab batches={visibleBatches} selectedKeys={selectedKeys} setSelectedKeys={setSelectedKeys}
                 rules={rules} adjustments={adjustments} trends={trends} series={series} fortyPercentAgents={fortyPercentAgents} noSupplementalAgents={noSupplementalAgents} />
             )}
             {tab === "lowactivity" && can(profile.role, "manage_followups") && (
@@ -551,10 +603,14 @@ export default function App() {
             {tab === "followups" && can(profile.role, "manage_followups") && (
               <FollowUpsTab interventions={interventions} updateStatus={handleUpdateInterventionStatus} removeIntervention={removeInterventionRecord} />
             )}
-            {tab === "weeks" && <WeeksTab batches={batches} rules={rules} fortyPercentAgents={fortyPercentAgents} noSupplementalAgents={noSupplementalAgents} />}
+            {tab === "weeks" && <WeeksTab batches={visibleBatches} rules={rules} fortyPercentAgents={fortyPercentAgents} noSupplementalAgents={noSupplementalAgents} />}
             {tab === "shopgroups" && (
-              <ShopGroupsTab batches={batches} selectedKeys={selectedKeys} setSelectedKeys={setSelectedKeys}
+              <ShopGroupsTab batches={visibleBatches} selectedKeys={selectedKeys} setSelectedKeys={setSelectedKeys}
                 rules={rules} fortyPercentAgents={fortyPercentAgents} noSupplementalAgents={noSupplementalAgents} />
+            )}
+            {tab === "datasources" && (
+              <DataSourcesPage ui={{ Panel, StatusBadge, C, serif, mono, nums }} batches={batches} dataSources={dataSources} syncRuns={syncRuns}
+                onRefresh={refreshSyncRuns} onGoToUpload={can(profile.role, "upload") ? () => setTab("upload") : null} />
             )}
             {tab === "insights" && (
               <InsightsTab agg={agg} trends={trends} inactiveList={inactiveList} droppedList={droppedList} />
@@ -639,7 +695,7 @@ function ReportFilters({ batches, selectedKeys, setSelectedKeys }) {
   }
   // Re-apply whenever the active tab or its own picker value changes, so
   // switching tabs doesn't leave a stale selection from the previous one.
-  useEffect(() => { applyFilter(); }, [granularity, selectedWeekKey, selectedMonth, selectedYear]);
+  useEffect(() => { applyFilter(); }, [granularity, selectedWeekKey, selectedMonth, selectedYear, batches.map(b => b.id).join(",")]);
 
   const toggleFile = (b) => {
     setSelectedKeys(prev => {
@@ -775,6 +831,7 @@ function UploadTab({ pendingFiles, setPendingFiles, handleFiles, parseAllPending
           <Kpi label="Agents" value={agg.agents.length} />
           <Kpi label="Total Stake" value={nairaShort(agg.totals.stake)} />
           <Kpi label="Total Commission" value={nairaShort(agg.totals.commission)} />
+          {agg.totals.reportedCommission > 0 && <Kpi label="Paid by source (not payable here)" value={nairaShort(agg.totals.reportedCommission)} />}
           <Kpi label="Total Bonus" value={nairaShort(agg.totals.monthlyBonus)} />
         </div>
         <Panel title="Rows parsed per block">
@@ -984,7 +1041,7 @@ function ReportsTab({ batches, selectedKeys, setSelectedKeys, rules, adjustments
           { id: "virtual", label: "Virtual (Globalbet)", kind: "products", products: ["Globalbet Virtual"] },
           { id: "sportsales", label: "Sport Sales report", kind: "products", products: ["Sports"] },
           { id: "onlineplayers", label: "Online Player Report", kind: "channel", channel: "online" },
-          { id: "xpool", label: "xPool", kind: "disabled", reason: "Not a tracked product yet — no sample file or confirmed formula (same status as S.Aviator)." },
+          { id: "xpool", label: "xPool", kind: "products", products: ["Xpool"] },
           { id: "sportticket", label: "Sport Ticket report", kind: "disabled", reason: "Not clearly distinct from Sport Sales report without more detail on what differs." },
         ];
         const selected = REPORT_LIST.find(r => r.id === reportViewId) || REPORT_LIST[0];
@@ -1003,7 +1060,7 @@ function ReportsTab({ batches, selectedKeys, setSelectedKeys, rules, adjustments
           reportAgg.totals = {
             stake: filtered.reduce((s, a) => s + a.stake, 0), payout: filtered.reduce((s, a) => s + a.payout, 0),
             profit: filtered.reduce((s, a) => s + a.profit, 0), commission: filtered.reduce((s, a) => s + a.sourceCommission, 0),
-            monthlyBonus: filtered.reduce((s, a) => s + a.monthlyBonus, 0),
+            monthlyBonus: filtered.reduce((s, a) => s + a.monthlyBonus, 0), reportedCommission: filtered.reduce((s, a) => s + a.reportedCommission, 0),
             moneyWin: filtered.reduce((s, a) => s + a.moneyWin, 0), hasMoneyWinData: filtered.some(a => a.hasMoneyWinData),
           };
         }
@@ -1044,6 +1101,7 @@ function ReportsTab({ batches, selectedKeys, setSelectedKeys, rules, adjustments
                       <Kpi label="Pending Payout" value={hasWinData ? nairaShort(pendingPayout) : "—"} />
                       <Kpi label="Net Profit" value={nairaShort(reportAgg.totals.profit)} />
                       <Kpi label="Commission" value={nairaShort(reportAgg.totals.commission)} />
+                      {reportAgg.totals.reportedCommission > 0 && <Kpi label="Commission paid by source" value={nairaShort(reportAgg.totals.reportedCommission)} />}
                       <Kpi label="Avg Daily Sales" value={nairaShort(avgDailySales)} />
                       <Kpi label="Number of Tickets" value={Math.round(reportAgg.agents.reduce((s, a) => s + a.tickets, 0)).toLocaleString()} />
                       <Kpi label="Number of Days" value={numDays} />
@@ -1079,7 +1137,11 @@ function ReportsTab({ batches, selectedKeys, setSelectedKeys, rules, adjustments
                                 <td style={{ padding: "8px 10px", textAlign: "right", ...nums, color: a.hasMoneyWinData ? "inherit" : C.sub }}>{a.hasMoneyWinData ? naira(a.moneyWin) : "—"}</td>
                                 <td style={{ padding: "8px 10px", textAlign: "right", ...nums }}>{naira(a.payout)}</td>
                                 <td style={{ padding: "8px 10px", textAlign: "right", ...nums, color: a.profit < 0 ? C.brick : C.emerald }}>{naira(a.profit)}</td>
-                                <td style={{ padding: "8px 10px", textAlign: "right", ...nums }}>{naira(a.sourceCommission)}</td>
+                                <td style={{ padding: "8px 10px", textAlign: "right", ...nums }}>
+                                  {a.reportedCommission > 0 && a.sourceCommission === 0
+                                    ? <span title="Calculated and paid by the source backoffice (Xpool). Reported here, not payable by us." style={{ color: C.sub }}>{naira(a.reportedCommission)} <span style={{ fontSize: 10 }}>paid by source</span></span>
+                                    : <>{naira(a.sourceCommission)}{a.reportedCommission > 0 && <div style={{ fontSize: 10, color: C.sub }}>+ {naira(a.reportedCommission)} paid by source</div>}</>}
+                                </td>
                                 <td style={{ padding: "8px 10px" }}>{a.commissionType || "—"}</td>
                               </tr>
                             ))}
@@ -1828,7 +1890,7 @@ function DropInSalesTab({ agg, droppedList, onCall }) {
 /* ============================================================ Trends */
 const PRODUCT_LABELS = {
   GB: "Globalbet Virtual", EB: "Luckyball & Luckygreek", EB_MB: "Luckyball Monthly Bonus",
-  SP: "Sports (weekly)", SP_MB: "Sport Monthly Bonus",
+  SP: "Sports (weekly)", SP_MB: "Sport Monthly Bonus", XP: "Xpool",
 };
 function TrendsTab({ series }) {
   const [metric, setMetric] = useState("stake");

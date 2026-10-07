@@ -7,7 +7,7 @@ import {
   FileSpreadsheet, History as HistoryIcon, BookOpen, X, Loader2, Trash2, LayoutGrid,
   Users, Package, MapPin, Search, ArrowUp, ArrowDown, Minus, Phone, ClipboardList, TrendingUp, TrendingDown, Check, LogOut, UserCog,
   Sliders, Activity as ActivityIcon, Eye, ChevronDown, Moon, Sun,
-  BarChart3, Calendar, Scale, Lightbulb, CreditCard, PhoneOff, Database, Store,
+  BarChart3, Calendar, Scale, Lightbulb, CreditCard, PhoneOff, Database, Store, ClipboardCheck,
 } from "lucide-react";
 
 import {
@@ -23,10 +23,15 @@ import {
   loadCommissionRules, updateCommissionRule, addCommissionRule, logActivity, loadActivityLog,
   loadAllAdjustments, addManualAdjustment, deleteManualAdjustment,
   loadAgentCommissionPlans, setAgentCommissionPlan, removeAgentCommissionPlan,
-  loadDataSources, loadSyncRuns,
+  loadDataSources, loadSyncRuns, listConnectors, runConnectorAction,
+  loadAllOverrides, saveOverride, deleteOverride, loadBatchReviews, markBatchReviewed, unmarkBatchReviewed,
 } from "./lib/dataLayer";
 import { SOURCES, filterBatchesBySource, sourceOfBatch } from "./lib/sources";
 import DataSourcesPage from "./DataSourcesPage";
+import ReviewAdjustPage from "./ReviewAdjustPage";
+import SheetCheckPanel from "./SheetCheckPanel";
+import { compareToSheet } from "./lib/sheetCheck";
+import { describeOp } from "./lib/reviewEdits";
 import LoginScreen from "./LoginScreen";
 
 /* ============================================================ design tokens */
@@ -198,6 +203,7 @@ const ALL_NAV = [
   { id: "weeks", label: "Weeks", icon: Calendar, action: "view_reports", section: "Operations" },
   { id: "history", label: "History", icon: HistoryIcon, action: "view_reports", section: "Operations" },
   { id: "shopgroups", label: "Shop Groups", icon: Store, action: "view_reports", section: "Finance" },
+  { id: "review", label: "Review & Adjust", icon: ClipboardCheck, action: "manage_adjustments", section: "Finance" },
   { id: "export", label: "Clean Export", icon: CreditCard, action: "export", section: "Finance" },
   { id: "rules", label: "Payout Rules", icon: Sliders, action: "manage_rules", section: "Finance" },
   { id: "formulas", label: "Formulas", icon: BookOpen, action: "view_reports", section: "Finance" },
@@ -239,6 +245,10 @@ export default function App() {
   const [sourceSel, setSourceSel] = useState("all");
   const [dataSources, setDataSources] = useState(null); // null = schema_v9 not run yet -> built-in list
   const [syncRuns, setSyncRuns] = useState([]);
+  const [overrides, setOverrides] = useState([]);
+  const [reviews, setReviews] = useState(null);      // null = review tracking not set up (schema_v12 not run)
+  const [reviewBatchId, setReviewBatchId] = useState(null);
+  const [connectorInfo, setConnectorInfo] = useState({ state: "checking", connectors: null });
   const fileInputRef = useRef(null);
 
   // ---- auth: check session on load, react to sign-in/out ----
@@ -262,7 +272,7 @@ export default function App() {
     if (!session) return;
     (async () => {
       setLoading(true);
-      const [loadedBatches, loadedInterventions, ruleData, loadedActivity, loadedAdjustments, loadedAgentPlans, loadedSources, loadedRuns] = await Promise.all([
+      const [loadedBatches, loadedInterventions, ruleData, loadedActivity, loadedAdjustments, loadedAgentPlans, loadedSources, loadedRuns, loadedOverrides, loadedReviews] = await Promise.all([
         loadAllBatches(),
         can(profile?.role, "manage_followups") ? loadAllInterventions() : Promise.resolve([]),
         // These tables are added by later migrations. If a migration hasn't been
@@ -276,6 +286,8 @@ export default function App() {
         loadAgentCommissionPlans().catch(() => []),
         loadDataSources().catch(() => null),
         loadSyncRuns().catch(() => []),
+        loadAllOverrides().catch(() => []),
+        loadBatchReviews().catch(() => null),
       ]);
       setBatches(loadedBatches);
       setSelectedKeys(new Set(loadedBatches.map(b => b.id)));
@@ -287,12 +299,60 @@ export default function App() {
       setAgentPlans(loadedAgentPlans);
       setDataSources(loadedSources);
       setSyncRuns(loadedRuns);
+      setOverrides(loadedOverrides);
+      setReviews(loadedReviews);
       setLoading(false);
     })();
   }, [session, profile?.role]);
 
   async function refreshActivity() {
     try { setActivityLog(await loadActivityLog()); } catch (e) { /* non-critical */ }
+  }
+  async function refreshOverrides() { try { setOverrides(await loadAllOverrides()); } catch (e) { /* non-critical */ } }
+  async function refreshReviews() { try { setReviews(await loadBatchReviews()); } catch (e) { /* non-critical */ } }
+
+  // ---- Review & Adjust: apply a person's corrections, undo one, mark a week reviewed, set a standing rule ----
+  async function handleSaveReviewEdits({ batch, agent, plan, reason }) {
+    const who = session.user.id;
+    for (const op of plan.commission) {
+      if (op.op === "save") await addManualAdjustment({ batchId: batch.id, agentUsername: agent, sourceBlock: op.block, originalCommission: op.original, adjustedCommission: op.adjusted, reason }, who);
+      else await deleteManualAdjustment(op.id);
+    }
+    for (const op of plan.supp) {
+      if (op.op === "save") await saveOverride({ batchId: batch.id, agentUsername: agent, field: op.field, originalValue: op.original, overrideValue: op.value, reason }, who);
+      else await deleteOverride(op.id);
+    }
+    await logActivity("manual_adjustment", `Review & Adjust · ${agent} · ${batch.filename}: ${[...plan.commission, ...plan.supp].map(describeOp).join("; ")}. Reason: ${reason}`, who);
+    await Promise.all([refreshAdjustments(), refreshOverrides()]);
+    refreshActivity();
+  }
+  async function handleRevertCorrection({ kind, row }) {
+    if (!window.confirm("Undo this correction and go back to the calculated figure?")) return;
+    try {
+      if (kind === "adjustment") await deleteManualAdjustment(row.id); else await deleteOverride(row.id);
+      await logActivity("manual_adjustment", `Review & Adjust · undid the correction for ${row.agentUsername} (${kind === "adjustment" ? row.sourceBlock : row.field}) — back to the calculated figure`, session.user.id);
+      await Promise.all([refreshAdjustments(), refreshOverrides()]);
+      refreshActivity();
+    } catch (e) { window.alert(e.message || "Couldn't undo this correction."); }
+  }
+  async function handleSetReviewed(batchId, reviewed, note) {
+    const b = batches.find(x => x.id === batchId);
+    if (reviewed) await markBatchReviewed(batchId, session.user.id, note); else await unmarkBatchReviewed(batchId);
+    await logActivity("manual_adjustment", `Review & Adjust · ${reviewed ? "marked reviewed" : "reopened for review"}: ${b ? b.filename : batchId}${note ? ` — ${note}` : ""}`, session.user.id);
+    await refreshReviews();
+    refreshActivity();
+  }
+  async function handleStandingRule(agent, note) {
+    await setAgentCommissionPlan(agent, "no_supplemental_pay", session.user.id, note);
+    await logActivity("manual_adjustment", `Standing rule: ${agent} gets no Bonus/Palliative/Gift in any week (set from Review & Adjust). ${note}`, session.user.id);
+    await refreshAgentPlans();
+    refreshActivity();
+  }
+  const unreviewedSelected = reviews === null ? [] : batches.filter(b => selectedKeys.has(b.id) && !reviews.some(r => r.batchId === b.id));
+
+  async function refreshConnectors() {
+    const r = await listConnectors();
+    setConnectorInfo({ state: r.reachable ? "reachable" : "unreachable", connectors: r.connectors });
   }
   async function refreshSyncRuns() {
     try { setSyncRuns(await loadSyncRuns()); } catch (e) { /* non-critical */ }
@@ -316,16 +376,22 @@ export default function App() {
       let parsed;
       try { parsed = PARSERS[pf.detectedType](rows); }
       catch (e) { setProcessing(false); window.alert(`${pf.name}: ${e.message}`); return; }
-      const { items, supplemental } = parsed;
+      const { items, supplemental, sheetFigures } = parsed;
       const period = detectPeriod(pf.name, pf.detectedType, rows);
       parsedBatches.push({
-        type: pf.detectedType, filename: pf.name, items, supplemental,
+        type: pf.detectedType, filename: pf.name, items, supplemental, sheetFigures: sheetFigures || [],
         periodStart: period.periodStart, periodEnd: period.periodEnd, periodConfidence: period.confidence,
       });
     }
-    const agg = aggregateBatches(parsedBatches, rules, [],
-      new Set(agentPlans.filter(p => p.plan === "forty_percent_profit").map(p => p.agentUsername.toLowerCase())),
-      new Set(agentPlans.filter(p => p.plan === "no_supplemental_pay").map(p => p.agentUsername.toLowerCase())));
+    const fortyNow = new Set(agentPlans.filter(p => p.plan === "forty_percent_profit").map(p => p.agentUsername.toLowerCase()));
+    const noSuppNow = new Set(agentPlans.filter(p => p.plan === "no_supplemental_pay").map(p => p.agentUsername.toLowerCase()));
+    const agg = aggregateBatches(parsedBatches, rules, [], fortyNow, noSuppNow);
+    // For every weekly sheet: what the sheet printed vs what the dashboard calculates for each agent, one week at a time
+    // (never merged across files), so a difference is visible BEFORE anything is saved.
+    const sheetChecks = parsedBatches.filter(b => b.sheetFigures && b.sheetFigures.length).map(b => ({
+      filename: b.filename,
+      ...compareToSheet({ sheetFigures: b.sheetFigures, agents: aggregateBatches([b], rules, [], fortyNow, noSuppNow).agents, fortyPercentAgents: fortyNow, noSupplementalAgents: noSuppNow }),
+    }));
     // Per-file, per-block item counts -- the direct way to spot a double-counting
     // bug before it becomes real data: a block with a suspiciously high count
     // relative to the others in the same file is exactly what caught the last one.
@@ -334,7 +400,7 @@ export default function App() {
       for (const item of b.items) counts[item.sourceBlock] = (counts[item.sourceBlock] || 0) + 1;
       return { filename: b.filename, type: b.type, counts, totalRows: b.items.length };
     });
-    setPreviewData({ parsedBatches, agg, blockCounts });
+    setPreviewData({ parsedBatches, agg, blockCounts, sheetChecks });
     setProcessing(false);
   }
 
@@ -362,7 +428,9 @@ export default function App() {
     setPendingFiles([]);
     setPreviewData(null);
     setProcessing(false);
-    setTab("reports");
+    // People who can correct pay go straight to the review step for the week just uploaded; others see the reports.
+    if (can(profile.role, "manage_adjustments") && newBatches.length) { setReviewBatchId(newBatches[newBatches.length - 1].id); setTab("review"); }
+    else setTab("reports");
     refreshActivity();
   }
 
@@ -436,7 +504,7 @@ export default function App() {
   const selectedBatches = visibleBatches.filter(b => selectedKeys.has(b.id));
   const fortyPercentAgents = new Set(agentPlans.filter(p => p.plan === "forty_percent_profit").map(p => p.agentUsername.toLowerCase()));
   const noSupplementalAgents = new Set(agentPlans.filter(p => p.plan === "no_supplemental_pay").map(p => p.agentUsername.toLowerCase()));
-  const agg = aggregateBatches(selectedBatches, rules, adjustments, fortyPercentAgents, noSupplementalAgents);
+  const agg = aggregateBatches(selectedBatches, rules, adjustments, fortyPercentAgents, noSupplementalAgents, overrides);
   const trends = computeTrends(visibleBatches);
   const series = computeBatchSeries(visibleBatches);
   const { inactive: inactiveList, dropped: droppedList } = computeInactiveAndDropAgents(visibleBatches);
@@ -589,7 +657,7 @@ export default function App() {
             )}
             {tab === "reports" && (
               <ReportsTab batches={visibleBatches} selectedKeys={selectedKeys} setSelectedKeys={setSelectedKeys}
-                rules={rules} adjustments={adjustments} trends={trends} series={series} fortyPercentAgents={fortyPercentAgents} noSupplementalAgents={noSupplementalAgents} />
+                rules={rules} adjustments={adjustments} overrides={overrides} trends={trends} series={series} fortyPercentAgents={fortyPercentAgents} noSupplementalAgents={noSupplementalAgents} />
             )}
             {tab === "lowactivity" && can(profile.role, "manage_followups") && (
               <LowActivityTab agg={agg} trends={trends} onCall={setCallAgent} />
@@ -603,21 +671,33 @@ export default function App() {
             {tab === "followups" && can(profile.role, "manage_followups") && (
               <FollowUpsTab interventions={interventions} updateStatus={handleUpdateInterventionStatus} removeIntervention={removeInterventionRecord} />
             )}
-            {tab === "weeks" && <WeeksTab batches={visibleBatches} rules={rules} fortyPercentAgents={fortyPercentAgents} noSupplementalAgents={noSupplementalAgents} />}
+            {tab === "weeks" && <WeeksTab batches={visibleBatches} rules={rules} adjustments={adjustments} overrides={overrides} fortyPercentAgents={fortyPercentAgents} noSupplementalAgents={noSupplementalAgents} />}
             {tab === "shopgroups" && (
               <ShopGroupsTab batches={visibleBatches} selectedKeys={selectedKeys} setSelectedKeys={setSelectedKeys}
-                rules={rules} fortyPercentAgents={fortyPercentAgents} noSupplementalAgents={noSupplementalAgents} />
+                rules={rules} adjustments={adjustments} overrides={overrides} fortyPercentAgents={fortyPercentAgents} noSupplementalAgents={noSupplementalAgents} />
             )}
             {tab === "datasources" && (
               <DataSourcesPage ui={{ Panel, StatusBadge, C, serif, mono, nums }} batches={batches} dataSources={dataSources} syncRuns={syncRuns}
-                onRefresh={refreshSyncRuns} onGoToUpload={can(profile.role, "upload") ? () => setTab("upload") : null} />
+                onRefresh={() => { refreshSyncRuns(); refreshConnectors(); }} onGoToUpload={can(profile.role, "upload") ? () => setTab("upload") : null}
+                connectorInfo={connectorInfo} canRun={profile.role === "admin" || profile.role === "finance"}
+                onTest={(source) => runConnectorAction({ action: "test", source })}
+                onSync={async (body) => { const r = await runConnectorAction({ action: "sync", ...body }); await refreshSyncRuns(); return r; }} />
             )}
             {tab === "insights" && (
               <InsightsTab agg={agg} trends={trends} inactiveList={inactiveList} droppedList={droppedList} />
             )}
+            {tab === "review" && can(profile.role, "manage_adjustments") && (
+              <ReviewAdjustPage key={reviewBatchId || "review"} ui={{ Panel, StatusBadge, C, serif, mono, nums, naira }}
+                batches={batches} rules={rules} adjustments={adjustments} overrides={overrides} reviews={reviews}
+                fortyPercentAgents={fortyPercentAgents} noSupplementalAgents={noSupplementalAgents}
+                canEdit={can(profile.role, "manage_adjustments")} canManagePlans={can(profile.role, "manage_agent_plans")}
+                initialBatchId={reviewBatchId} onSaveEdits={handleSaveReviewEdits} onRevert={handleRevertCorrection}
+                onSetReviewed={handleSetReviewed} onStandingRule={handleStandingRule} />
+            )}
             {tab === "export" && can(profile.role, "export") && (
               <ExportTab agg={agg} canAdjust={can(profile.role, "manage_adjustments")} userId={session.user.id}
-                refreshAdjustments={refreshAdjustments} logActivityFn={logActivity} />
+                refreshAdjustments={refreshAdjustments} logActivityFn={logActivity}
+                unreviewedCount={unreviewedSelected.length} onGoReview={can(profile.role, "manage_adjustments") ? () => { setReviewBatchId(unreviewedSelected[0] && unreviewedSelected[0].id); setTab("review"); } : null} />
             )}
             {tab === "history" && <HistoryTab batches={batches} removeBatch={can(profile.role, "delete_upload") ? removeBatch : null} />}
             {tab === "rules" && can(profile.role, "manage_rules") && (
@@ -834,6 +914,7 @@ function UploadTab({ pendingFiles, setPendingFiles, handleFiles, parseAllPending
           {agg.totals.reportedCommission > 0 && <Kpi label="Paid by source (not payable here)" value={nairaShort(agg.totals.reportedCommission)} />}
           <Kpi label="Total Bonus" value={nairaShort(agg.totals.monthlyBonus)} />
         </div>
+        <SheetCheckPanel ui={{ Panel, StatusBadge, C, serif, mono, nums, naira }} checks={previewData.sheetChecks} />
         <Panel title="Rows parsed per block">
           {blockCounts.map((b, i) => (
             <div key={i} style={{ marginBottom: 10 }}>
@@ -982,7 +1063,7 @@ const REPORT_VIEWS = [
   ["overview", "Overview"], ["agents", "Agents"], ["products", "Products"], ["states", "States"], ["trends", "Trends"],
 ];
 
-function ReportsTab({ batches, selectedKeys, setSelectedKeys, rules, adjustments, trends, series, fortyPercentAgents, noSupplementalAgents }) {
+function ReportsTab({ batches, selectedKeys, setSelectedKeys, rules, adjustments, overrides, trends, series, fortyPercentAgents, noSupplementalAgents }) {
   const [view, setView] = useState("overview");
   const [reportViewId, setReportViewId] = useState("all");
   const [slicerProducts, setSlicerProducts] = useState(new Set());
@@ -995,9 +1076,9 @@ function ReportsTab({ batches, selectedKeys, setSelectedKeys, rules, adjustments
   const selectedBatches = batches.filter(b => selectedKeys.has(b.id));
   // Unsliced, date-filtered only -- drives the slicer option lists themselves,
   // so choosing a product doesn't make the other slicer's own options vanish.
-  const dateOnlyAgg = aggregateBatches(selectedBatches, rules, adjustments, fortyPercentAgents, noSupplementalAgents);
+  const dateOnlyAgg = aggregateBatches(selectedBatches, rules, adjustments, fortyPercentAgents, noSupplementalAgents, overrides);
   const slicedBatches = filterBatchesForSlicers(selectedBatches, { products: slicerProducts, states: slicerStates, channels: slicerChannels });
-  const agg = aggregateBatches(slicedBatches, rules, adjustments, fortyPercentAgents, noSupplementalAgents);
+  const agg = aggregateBatches(slicedBatches, rules, adjustments, fortyPercentAgents, noSupplementalAgents, overrides);
 
   const toggleSetValue = (setter) => (value) => setter(prev => {
     const next = new Set(prev);
@@ -1049,7 +1130,7 @@ function ReportsTab({ batches, selectedKeys, setSelectedKeys, rules, adjustments
         const reportBatches = selected.kind === "channel" ? selectedBatches
           : selected.kind === "products" ? filterBatchesForSlicers(selectedBatches, { products: new Set(selected.products), states: new Set(), channels: new Set() })
           : selectedBatches;
-        const reportAggRaw = aggregateBatches(reportBatches, rules, adjustments, fortyPercentAgents, noSupplementalAgents);
+        const reportAggRaw = aggregateBatches(reportBatches, rules, adjustments, fortyPercentAgents, noSupplementalAgents, overrides);
         const reportAgg = selected.kind === "channel"
           ? { ...reportAggRaw, agents: reportAggRaw.agents.filter(a => a.channel === selected.channel) }
           : reportAggRaw;
@@ -1484,7 +1565,7 @@ function AgentsTab({ agg, trends }) {
             { label: "Total Earnings", get: a => a.totalEarnings !== null ? a.totalEarnings.toFixed(2) : "" },
             { label: "Balance", get: a => a.balance !== null ? a.balance.toFixed(2) : "" },
             { label: "Formula Verified", get: a => a.allVerified ? "Yes" : "Check mismatch" },
-            { label: "Manually Adjusted", get: a => a.hasAdjustment ? "Yes" : "" },
+            { label: "Manually Adjusted", get: a => (a.hasAdjustment || a.hasEdit) ? "Yes" : "" },
           ])} style={{
             display: "flex", alignItems: "center", gap: 6, border: "none", background: C.emerald, color: "#fff", borderRadius: 8,
             padding: "7px 13px", fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap",
@@ -1492,9 +1573,9 @@ function AgentsTab({ agg, trends }) {
         </div>
       }>
         <div style={{ fontSize: 11.5, color: C.sub, marginBottom: 10 }}>
-          Bonus/Palliative/Gift/Avg Stake/Total Earnings only come from Globalbet's legacy-format export — not
-          tracked when only the tree-format file is uploaded (confirmed workflow), and always "—" for other products.
-          Commission already reflects the confirmed uplift where one applies, so it doesn't need its own separate column.
+          Bonus/Palliative/Gift/Avg Stake/Total Earnings apply to Globalbet only ("—" for other products). They come from the
+          legacy sheet when one covers that week; for a week with only the Financial Overview file they are calculated from it
+          with the same verified formulas. Commission already includes the 10% uplift where one applies, so it has no separate column.
         </div>
         <div style={{ maxHeight: 560, overflow: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 1280 }}>
@@ -1745,10 +1826,10 @@ function LowActivityTab({ agg, trends, onCall }) {
   );
 }
 
-function ShopGroupsTab({ batches, selectedKeys, setSelectedKeys, rules, fortyPercentAgents, noSupplementalAgents }) {
+function ShopGroupsTab({ batches, selectedKeys, setSelectedKeys, rules, adjustments, overrides, fortyPercentAgents, noSupplementalAgents }) {
   const [view, setView] = useState("tonybet");
   const selectedBatches = batches.filter(b => selectedKeys.has(b.id));
-  const agg = aggregateBatches(selectedBatches, rules, [], fortyPercentAgents, noSupplementalAgents);
+  const agg = aggregateBatches(selectedBatches, rules, adjustments, fortyPercentAgents, noSupplementalAgents, overrides);
   if (agg.agents.length === 0) return <EmptyState />;
 
   // Confirmed: tonybet and josh stay as two SEPARATE totals -- not merged
@@ -2134,7 +2215,7 @@ function AdjustmentModal({ mismatch, onClose, onSave }) {
   );
 }
 
-function ExportTab({ agg, canAdjust, userId, refreshAdjustments, logActivityFn }) {
+function ExportTab({ agg, canAdjust, userId, refreshAdjustments, logActivityFn, unreviewedCount, onGoReview }) {
   const [adjusting, setAdjusting] = useState(null); // the mismatch being adjusted, or null
   const [removingId, setRemovingId] = useState(null);
 
@@ -2164,6 +2245,12 @@ function ExportTab({ agg, canAdjust, userId, refreshAdjustments, logActivityFn }
   return (
     <>
       <h1 style={{ ...serif, fontSize: 28, fontWeight: 500, margin: "0 0 20px" }}>Clean Export</h1>
+      {unreviewedCount > 0 && (
+        <div style={{ border: `1px solid ${C.line}`, borderLeft: `3px solid ${C.amber}`, background: C.panel, borderRadius: 8, padding: "12px 16px", marginBottom: 18, fontSize: 13, lineHeight: 1.5, display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
+          <span><strong>{unreviewedCount} of the selected week{unreviewedCount !== 1 ? "s haven't" : " hasn't"} been reviewed.</strong> Check the figures and any special cases before paying from this export.</span>
+          {onGoReview && <button onClick={onGoReview} style={{ border: `1px solid ${C.line}`, background: C.paper, color: C.ink, borderRadius: 7, padding: "5px 12px", fontSize: 12, cursor: "pointer", fontWeight: 600 }}>Review now</button>}
+        </div>
+      )}
       <Panel>
         <div style={{ fontSize: 13, color: C.sub, lineHeight: 1.5 }}>
           This is the cleaned data for the period selected above, using each agent's own commission and bonus figures
@@ -2201,7 +2288,7 @@ function ExportTab({ agg, canAdjust, userId, refreshAdjustments, logActivityFn }
           { label: "Monthly Bonus", get: a => a.monthlyBonus.toFixed(2) },
           { label: "Total", get: a => (a.sourceCommission + a.monthlyBonus).toFixed(2) },
           { label: "Formula Verified", get: a => a.allVerified ? "Yes" : "Check mismatch" },
-          { label: "Manually Adjusted", get: a => a.hasAdjustment ? "Yes" : "" },
+          { label: "Manually Adjusted", get: a => (a.hasAdjustment || a.hasEdit) ? "Yes" : "" },
           { label: "Bonus", get: a => a.bonus ? a.bonus.toFixed(2) : "" },
           { label: "Palliative", get: a => a.palliative ? a.palliative.toFixed(2) : "" },
           { label: "Gift", get: a => a.gift ? a.gift.toFixed(2) : "" },
@@ -2232,7 +2319,7 @@ function ExportTab({ agg, canAdjust, userId, refreshAdjustments, logActivityFn }
                   <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}` }}>{a.monthlyBonus ? naira(a.monthlyBonus) : "—"}</td>
                   <td style={{ ...nums, padding: "8px", borderBottom: `1px solid ${C.line}`, fontWeight: 600 }}>{naira(a.sourceCommission + a.monthlyBonus)}</td>
                   <td style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-                    {a.hasAdjustment ? <StatusBadge tone="amber">Adjusted</StatusBadge>
+                    {(a.hasAdjustment || a.hasEdit) ? <StatusBadge tone="amber">Adjusted</StatusBadge>
                       : a.allVerified ? <StatusBadge tone="green">Verified</StatusBadge>
                       : <StatusBadge tone="red">Check mismatch</StatusBadge>}
                   </td>
@@ -2294,7 +2381,7 @@ function ExportTab({ agg, canAdjust, userId, refreshAdjustments, logActivityFn }
 }
 
 /* ============================================================ History */
-function WeeksTab({ batches, rules, fortyPercentAgents, noSupplementalAgents }) {
+function WeeksTab({ batches, rules, adjustments, overrides, fortyPercentAgents, noSupplementalAgents }) {
   // Groups uploaded files by their real reporting period (periodStart +
   // periodEnd), not by upload order or filename -- several products can
   // share the same week, and this is the one place that shows "everything
@@ -2309,7 +2396,7 @@ function WeeksTab({ batches, rules, fortyPercentAgents, noSupplementalAgents }) 
   const periods = Array.from(byPeriod.entries())
     .map(([key, periodBatches]) => {
       const [periodStart, periodEnd] = key.split("__");
-      const agg = aggregateBatches(periodBatches, rules, [], fortyPercentAgents, noSupplementalAgents);
+      const agg = aggregateBatches(periodBatches, rules, adjustments, fortyPercentAgents, noSupplementalAgents, overrides);
       const products = [...new Set(periodBatches.map(b => PRODUCT_LABELS[b.type] || b.type))];
       return { periodStart, periodEnd, products, batchCount: periodBatches.length, totals: agg.totals, agentCount: agg.agents.length };
     })
@@ -2374,7 +2461,9 @@ function FormulasTab() {
     { block: "Luckyball / Luckygreek / Rocket Man (weekly)", formula: "Per-agent Type field: sale(X%) → X% of stake; profit(X%) → X% of profit", status: "confirmed", note: "Zero variance against every sampled agent" },
     { block: "Luckyball Monthly Bonus", formula: "Same Type-based rule as above", status: "confirmed", note: "Zero variance" },
     { block: "Globalbet Virtual — 40%-tier agents", formula: "40% of profit — value read from Block A's own commission column", status: "confirmed", note: "Zero variance, independently verified against real agent rows" },
-    { block: "Globalbet Virtual — UP-10%-tier agents", formula: "Selections-per-ticket sliding scale (4%–10% of stake), calculated by AccessBET's own system — value read from the tier block's own commission column, NOT Block A", status: "external", note: "Verified exactly: for 290 real agents across two separate weeks, this tier's commission + bonus + palliative + gift equals the sheet's own Total Earnings figure to the cent, zero exceptions. (A first attempt at this fix read the wrong column and silently changed nothing -- caught by testing against Total Earnings instead of just comparing two commission columns to each other.)" },
+    { block: "Globalbet Virtual — default plan (\"Up to 10%\")", formula: "Commission = Globalbet's own base Commission x 1.10 (a flat 10% uplift)", status: "confirmed", note: "Verified exactly on 274 of 274 agents across two weekly sheets, zero exceptions. Bonus, Palliative and Gift are then calculated (see the Globalbet bonus rows) and Total Earnings = commission + bonus + palliative + gift, to the cent." },
+    { block: "Globalbet Virtual — stake", formula: "Total In minus Reversal", status: "confirmed", note: "Matches the weekly sheet for 177 of 177 agents; gross Total In matches only the 140 with no reversal. Globalbet's own Profit already nets reversals out." },
+    { block: "Globalbet Virtual — a week with only the Financial Overview file", formula: "Uplifted commission, Bonus, Palliative and Gift are calculated from the file's own tickets, stake, profit and base commission", status: "confirmed", note: "Same formulas as the legacy sheet. Against the legacy sheet for the same week: identical for 173 of 176 agents; the other three differ by a small Profit difference (two) or by the negotiated spareshop commission (one). A legacy sheet for the same week, when uploaded, takes precedence." },
     { block: "Sports — 35% tier", formula: "35% of profit", status: "confirmed", note: "Zero variance on every row with positive profit" },
     { block: "Sports — POOL tier", formula: "15% of profit", status: "tentative", note: "Only 3 samples — treat as provisional" },
     { block: "Sports — UP-30% tier", formula: "Selections-per-ticket sliding scale (1%–30% of profit) + a monthly bonus (30% of monthly profit minus that month's commissions), calculated by AccessBET's own system", status: "external", note: "Structure partially confirmed: about 1 in 5 tested agents matched an allowed percentage almost exactly, but some agents showed ratios above the stated 30% maximum — worth checking with the platform. Selections-per-ticket isn't in this export, so this can't be independently re-derived here; the sheet's own commission value is trusted as-is." },

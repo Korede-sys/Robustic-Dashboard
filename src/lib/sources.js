@@ -83,17 +83,22 @@ export function sourceProvides(capabilities, capabilityId) {
   return !!(capabilities && capabilities[capabilityId]);
 }
 
-// Live-connection status comes ONLY from live sync runs. Manual CSV uploads are
-// recorded as runs with mode "manual" and must never make a backoffice look
-// "Connected": Connected requires a successful non-manual sync.
+// Live-connection status comes ONLY from live connector runs. A manual CSV upload
+// is recorded as a run too but never counts: Connected requires a live sync that
+// has actually RETRIEVED real data (records_seen > 0), so a connector that
+// merely authenticates, or syncs an empty window, cannot show Connected.
+// `via` (added by schema_v11) distinguishes the two; rows written before it
+// existed are classed by mode (CSV uploads were always mode "manual").
+const isLiveRun = (r) => (r.via ?? (r.mode === "manual" ? "csv_upload" : "connector")) === "connector";
 export function liveConnectionStatus(runs, disabled = false) {
   if (disabled) return "Disabled";
-  const live = (runs || []).filter(r => r.mode !== "manual");
+  const live = (runs || []).filter(isLiveRun);
   if (live.length === 0) return "Not Connected";
   const latest = live[0]; // runs arrive newest-first
   if (latest.status === "running") return "Syncing";
   if (latest.status === "failed") return "Sync Failed";
-  return "Connected";
+  const gotRealData = live.some(r => (r.status === "succeeded" || r.status === "partial") && (r.records_seen || 0) > 0);
+  return gotRealData ? "Connected" : "Not Connected";
 }
 
 // True when a Supabase insert failed only because schema_v9 hasn't been run,

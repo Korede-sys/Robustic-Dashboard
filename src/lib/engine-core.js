@@ -220,6 +220,30 @@ function stripTreePrefix(raw) {
 }
 function isOnlineUsername(u) { return String(u || "").toLowerCase().startsWith("elb-"); }
 
+// ---- Globalbet weekly pay: one implementation, used by BOTH formats ----------
+// Globalbet's own report gives each agent a base Commission. The "Up to 10%" plan
+// pays that PLUS a flat 10% ("Commission (1.10%)"): verified exactly on 274 of 274
+// default-plan agents across two real weekly sheets, zero exceptions.
+const GB_COMMISSION_UPLIFT = 1.10;
+const GB_TICKET_TIERS = [[800, 2500], [1000, 4500], [1200, 6000], [1500, 7000], [2000, 9000], [2500, 15000]];
+const GB_SALES_TIERS = [[150000, 2500], [200000, 4500], [300000, 6000], [400000, 7000], [500000, 9000], [800000, 15000]];
+function gbTierOf(value, tiers) { let result = 0; for (const [threshold, amt] of tiers) if ((value || 0) >= threshold) result = amt; return result; }
+// Bonus (weekly "fuel money"): the LOWER of the ticket-count tier and the sales
+// tier, each decided independently. Palliative: eligible at stake >= 200,000 AND
+// tickets >= 800; 50% of Profit minus the uplifted commission minus Bonus, floored
+// at 0, capped at 10,000. Gift: whatever is left of a shared ceiling of
+// MIN(20,000, 35% of Profit minus the uplifted commission) after Palliative.
+// All three verified against real sheets (see the notes in parseGBLegacyTiered).
+function deriveGlobalbetSupplemental({ tickets, stake, profit, uplift }) {
+  const bonus = Math.min(gbTierOf(tickets, GB_TICKET_TIERS), gbTierOf(stake, GB_SALES_TIERS));
+  const palEligible = (stake || 0) >= 200000 && (tickets || 0) >= 800;
+  const palRaw = palEligible ? 0.5 * (profit || 0) - (uplift || 0) - (bonus || 0) : 0;
+  const palliative = palEligible ? Math.min(10000, Math.max(0, palRaw)) : 0;
+  const giftCeiling = Math.min(20000, Math.max(0, 0.35 * (profit || 0) - (uplift || 0)));
+  const gift = Math.max(0, giftCeiling - palliative);
+  return { bonus, palliative, gift };
+}
+
 function parseGBFinancialOverview(rows) {
   // Walks the tree in file order. Confirmed policy (reversed from an earlier
   // decision in this same system): cashier sub-accounts (e.g.
@@ -254,7 +278,13 @@ function parseGBFinancialOverview(rows) {
     // regardless of what the sheet shows. Stake counts, payment doesn't.
     if (!AGENT_USERNAME_RE.test(rawUsername) && !isOnlineUsername(rawUsername)) continue;
 
-    const tickets = money(get(row, 3)), stake = money(get(nextRow, 5)), payout = money(get(nextRow, 6));
+    // Total In is GROSS. The weekly sheet (and Globalbet's own Profit column)
+    // use it NET of Reversal -- verified: sheet stake == Total In - Reversal for
+    // 177 of 177 agents, whereas gross Total In matches only the 140 with no
+    // reversal. Ignoring this overstated stake (and every tier that depends on
+    // it) for any agent with a reversed ticket.
+    const reversal = money(get(nextRow, 14));
+    const tickets = money(get(row, 3)), stake = (money(get(nextRow, 5)) || 0) - (reversal || 0), payout = money(get(nextRow, 6));
     const profit = money(get(nextRow, 17)), commission = money(get(nextRow, 15));
     const key = rawUsername.toLowerCase();
     byAgent.set(key, {
@@ -279,6 +309,9 @@ function parseGBLegacyTiered(rows) {
   // Block B was confirmed to be a pure restatement of Block A with no discrepancy,
   // so it's still never used as its own source.
   const tier10ByAgent = {};
+  // What the sheet itself printed for each agent's pay, kept so the dashboard's own calculation can be checked
+  // against it (a different answer is either a sheet error or a rule the dashboard doesn't know about).
+  const sheetFigures = [];
   for (const row of rows.slice(3)) {
     const u = String(get(row, 30)).trim();
     if (!u || isHouseAgent(u)) continue;
@@ -286,52 +319,17 @@ function parseGBLegacyTiered(rows) {
       commission: money(get(row, 40)), totalEarnings: money(get(row, 44)),
       balance: money(get(row, 45)), avgStake: money(get(row, 46)),
     };
+    sheetFigures.push({ agentUsername: u, commission: money(get(row, 40)), bonus: money(get(row, 41)), palliative: money(get(row, 42)), gift: money(get(row, 43)), totalEarnings: money(get(row, 44)) });
     const tier10Tickets = money(get(row, 31)), tier10Stake = money(get(row, 32)), tier10Profit = money(get(row, 38));
     const commUplift = money(get(row, 40));
-    // Bonus (weekly "fuel money"): confirmed formula, verified 147/149
-    // against the real reference dataset -- both remaining exceptions
-    // already explained (001fc-gwa-spareshop has the same internally
-    // inconsistent sheet data flagged for Palliative/Gift; elb-6fatima23 is
-    // an online agent, already correctly zeroed by the existing
-    // online-exclusion policy downstream regardless of what this computes).
-    // The two documented tiers (by ticket count, by stake/sales) are each
-    // determined INDEPENDENTLY -- not requiring both to land in the same
-    // bracket -- and the paid bonus is the LOWER of the two. Confirmed
-    // against real data: an agent can have enough tickets to reach the
-    // 15,000 tier but only enough stake to reach the 9,000 tier, and gets
-    // paid 9,000, not 15,000 -- the ticket count alone is not sufficient.
-    const TICKET_TIERS = [[800, 2500], [1000, 4500], [1200, 6000], [1500, 7000], [2000, 9000], [2500, 15000]];
-    const SALES_TIERS = [[150000, 2500], [200000, 4500], [300000, 6000], [400000, 7000], [500000, 9000], [800000, 15000]];
-    const tierOf = (value, tiers) => { let result = 0; for (const [threshold, amt] of tiers) if ((value || 0) >= threshold) result = amt; return result; };
-    const b = Math.min(tierOf(tier10Tickets, TICKET_TIERS), tierOf(tier10Stake, SALES_TIERS));
-    if (b) supplemental.push({ agentUsername: u, type: "bonus", amount: b });
-    // Palliative: confirmed formula, verified 136/137 exact against a real
-    // 150-agent reference (the one exception has an internal inconsistency
-    // in the source sheet itself -- its own uplifted commission is LOWER
-    // than its base commission, backwards from every other row, so it's
-    // being treated as a data error in the source, not a formula miss).
-    // Eligibility: stake >= 200,000 AND tickets >= 800 (both from this same
-    // tier10 row, not Block A's figures). When eligible: 50% of this row's
-    // own Profit, minus the uplifted commission, minus Bonus, floored at 0,
-    // capped at 10,000. Computed here rather than read from the sheet --
-    // this is the whole point of confirming the formula: no manual work
-    // needed to get this number going forward.
-    const palEligible = (tier10Stake || 0) >= 200000 && (tier10Tickets || 0) >= 800;
-    const palRaw = palEligible ? 0.5 * (tier10Profit || 0) - (commUplift || 0) - (b || 0) : 0;
-    const p = palEligible ? Math.min(10000, Math.max(0, palRaw)) : 0;
-    if (p) supplemental.push({ agentUsername: u, type: "palliative", amount: p });
-    // Gift: confirmed formula, verified 136/137 against the same real
-    // reference dataset. A shared ceiling of MIN(20000, 35% x this row's
-    // own Profit - Commission(1.10%)) covers Palliative + Gift together --
-    // Palliative takes its share first (already computed above, capped at
-    // 10,000 on its own separate 50% formula), and Gift is whatever's left
-    // of the 20,000 ceiling after that. No separate eligibility gate needed
-    // here -- Palliative's own eligibility already determines how much of
-    // the ceiling it consumes, and Gift naturally gets the full ceiling
-    // when Palliative was 0 (ineligible or profit too low to reach 10,000).
-    const giftCeiling = Math.min(20000, Math.max(0, 0.35 * (tier10Profit || 0) - (commUplift || 0)));
-    const g = Math.max(0, giftCeiling - p);
-    if (g) supplemental.push({ agentUsername: u, type: "gift", amount: g });
+    // Bonus / Palliative / Gift: confirmed formulas (bonus verified 147/149, palliative
+    // and gift 136/137 against real sheets; the exceptions are explained -- see
+    // deriveGlobalbetSupplemental). Computed here from this tier10 row's OWN
+    // tickets, stake and profit and its uplifted commission, not read from the sheet.
+    const d = deriveGlobalbetSupplemental({ tickets: tier10Tickets, stake: tier10Stake, profit: tier10Profit, uplift: commUplift });
+    if (d.bonus) supplemental.push({ agentUsername: u, type: "bonus", amount: d.bonus });
+    if (d.palliative) supplemental.push({ agentUsername: u, type: "palliative", amount: d.palliative });
+    if (d.gift) supplemental.push({ agentUsername: u, type: "gift", amount: d.gift });
   }
   for (const row of rows.slice(3)) {
     const u = String(get(row, 1)).trim();
@@ -347,7 +345,7 @@ function parseGBLegacyTiered(rows) {
       totalEarnings: tier10 ? tier10.totalEarnings : null, avgStake: tier10 ? tier10.avgStake : null,
     });
   }
-  return { items, supplemental };
+  return { items, supplemental, sheetFigures };
 }
 
 function parseEB(rows) {
@@ -616,7 +614,7 @@ function productOf(block) {
   if (block.startsWith("XP:")) return "Xpool";
   return "Other";
 }
-function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES, adjustments = [], fortyPercentAgents = new Set(), noSupplementalAgents = new Set()) {
+function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES, adjustments = [], fortyPercentAgents = new Set(), noSupplementalAgents = new Set(), overrides = [], opts = {}) {
   const agentMap = new Map();
   const productAgg = new Map();
   const stateAgg = new Map();
@@ -624,6 +622,13 @@ function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES, adjustments
   const appliedAdjustments = [];
   const adjustmentMap = new Map();
   for (const adj of adjustments) adjustmentMap.set(adjustmentKey(adj.batchId, adj.agentUsername, adj.sourceBlock), adj);
+  // Review & Adjust: a person's correction of one agent's Bonus / Palliative / Gift for ONE week.
+  // Keyed by batch so it can never leak into another week of the same agent.
+  const overrideKey = (batchId, agent, field) => `${batchId}|${String(agent).toLowerCase()}|${field}`;
+  const overrideMap = new Map();
+  for (const o of overrides) overrideMap.set(overrideKey(o.batchId, o.agentUsername, o.field), o);
+  const appliedOverrides = [];
+  const lines = [];   // optional per-line view for the Review page: what each source line actually pays
   let verifiedCount = 0, unverifiedCount = 0, mismatchCount = 0, overrideCount = 0, adjustedCount = 0, reportedOnlyCount = 0;
 
   const PRODUCT_OF = productOf;
@@ -638,18 +643,38 @@ function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES, adjustments
   // Bonus/Palliative/Gift) and the tree file's contribution for that same
   // agent is suppressed, the mirror image of the priority this used to have
   // before the reversal.
-  const legacyCoveredGBAgents = new Set();
+  // A legacy sheet suppresses the tree only for the SAME period. (It used to do so
+  // across all periods, so viewing two weeks together silently dropped any week that
+  // had only a tree file for an agent who had a sheet in another week.) Same period
+  // means the ranges overlap by at least half of the shorter one, so a one-day
+  // boundary difference still counts as the same week while adjacent weeks do not.
+  // If either period is unknown the old, conservative behaviour applies (suppress).
+  const dayMs = 86400000;
+  const periodDays = (b) => (b.periodStart && b.periodEnd) ? Math.max(1, Math.round((new Date(b.periodEnd) - new Date(b.periodStart)) / dayMs) + 1) : null;
+  const samePeriod = (x, y) => {
+    const dx = periodDays(x), dy = periodDays(y);
+    if (dx === null || dy === null) return true;
+    const start = Math.max(new Date(x.periodStart), new Date(y.periodStart)), end = Math.min(new Date(x.periodEnd), new Date(y.periodEnd));
+    const overlap = Math.max(0, Math.round((end - start) / dayMs) + 1);
+    return overlap >= 0.5 * Math.min(dx, dy);
+  };
+  const legacyBatchesByAgent = new Map();
   for (const batch of batches) {
     for (const item of batch.items) {
-      if (item.sourceBlock === "GB:BLOCK_A") legacyCoveredGBAgents.add(item.agentUsername.toLowerCase());
+      if (item.sourceBlock !== "GB:BLOCK_A") continue;
+      const k = item.agentUsername.toLowerCase();
+      if (!legacyBatchesByAgent.has(k)) legacyBatchesByAgent.set(k, []);
+      legacyBatchesByAgent.get(k).push(batch);
     }
   }
+  const coveredByLegacy = (item, batch) => (legacyBatchesByAgent.get(item.agentUsername.toLowerCase()) || []).some(lb => samePeriod(lb, batch));
+  const derivedSupplemental = [];   // bonus/palliative/gift worked out for weeks that have only the tree file
 
   for (const batch of batches) {
     for (const item of batch.items) {
       if (EXCLUDED_BLOCKS.has(item.sourceBlock) || !STRUCTURALLY_TRUSTED.has(item.sourceBlock)) continue;
       if (item.isHouse) continue;
-      if (item.sourceBlock === "GB:FIN_OVERVIEW" && legacyCoveredGBAgents.has(item.agentUsername.toLowerCase())) continue;
+      if (item.sourceBlock === "GB:FIN_OVERVIEW" && coveredByLegacy(item, batch)) continue;
       const meta = decodeItemAgent(item);
       let calc, confidence, verified, diff, diffPct, isOverride;
       if (PAID_BY_SOURCE_BLOCKS.has(item.sourceBlock)) {
@@ -701,7 +726,18 @@ function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES, adjustments
       const payableCommission = paidBySource ? 0 : adjustment ? adjustment.adjustedCommission
         : isOnlinePolicyZero ? 0
         : isFortyPercentPlan ? Math.max(0, 0.40 * (item.profit || 0))
-        : isOverride ? calc : (item.commissionAmount || 0);
+        : isOverride ? calc
+        : (item.sourceBlock === "GB:FIN_OVERVIEW" && !noSupplementalAgents.has(item.agentUsername.toLowerCase()))
+          ? (item.commissionAmount || 0) * GB_COMMISSION_UPLIFT     // tree reports the BASE commission; the plan pays base + 10%
+        : (item.commissionAmount || 0);
+      if (opts.lines) lines.push({ batchId: batch.id, agent: item.agentUsername, block: item.sourceBlock, sheetCommission: item.commissionAmount || 0, payableCommission, adjusted: !!adjustment });
+      if (item.sourceBlock === "GB:FIN_OVERVIEW" && !adjustment && !isFortyPercentPlan && meta.channel !== "online") {
+        // Tree-only week: work out Bonus / Palliative / Gift from the tree's own figures with the
+        // same verified formulas the legacy sheet path uses. The policy exclusions (online, 40% plan,
+        // no_supplemental_pay) are applied once, in the supplemental pass below.
+        const d = deriveGlobalbetSupplemental({ tickets: item.tickets, stake: item.stake, profit: item.profit, uplift: (item.commissionAmount || 0) * GB_COMMISSION_UPLIFT });
+        for (const type of ["bonus", "palliative", "gift"]) if (d[type]) derivedSupplemental.push({ batchId: batch.id, agentUsername: item.agentUsername, type, amount: d[type] });
+      }
       if (adjustment) {
         adjustedCount++;
         appliedAdjustments.push({
@@ -722,7 +758,7 @@ function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES, adjustments
           username: item.agentUsername, state: meta.stateName, channel: meta.channel,
           tickets: 0, stake: 0, payout: 0, profit: 0, sourceCommission: 0, calcCommission: 0,
           monthlyBonus: 0, bonus: 0, palliative: 0, gift: 0, products: new Set(), allVerified: true, hasOverride: false, hasAdjustment: false,
-          totalEarnings: null, balance: null, avgStake: null, onFortyPercentPlan: fortyPercentAgents.has(key),
+          totalEarnings: null, balance: null, avgStake: null, hasEdit: false, editedFields: [], hasGB: false, gbItems: 0, gbTickets: 0, gbStake: 0, gbProfit: 0, gbCommission: 0, onFortyPercentPlan: fortyPercentAgents.has(key),
           onNoSupplementalPlan: noSupplementalAgents.has(key), moneyWin: 0, hasMoneyWinData: false, commissionType: null, reportedCommission: 0,
         });
       }
@@ -730,6 +766,7 @@ function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES, adjustments
       a.tickets += item.tickets || 0; a.stake += item.stake || 0; a.payout += item.payout || 0;
       a.profit += item.profit || 0; a.sourceCommission += payableCommission;
       if (paidBySource) a.reportedCommission += item.commissionAmount || 0;
+      if (item.sourceBlock.startsWith("GB:")) { a.hasGB = true; a.gbItems++; a.gbTickets += item.tickets || 0; a.gbStake += item.stake || 0; a.gbProfit += item.profit || 0; a.gbCommission += payableCommission; }
       if (item.moneyWin !== null && item.moneyWin !== undefined) { a.moneyWin += item.moneyWin; a.hasMoneyWinData = true; }
       if (item.commissionType) a.commissionType = item.commissionType;
       a.calcCommission += calc || 0;
@@ -765,35 +802,59 @@ function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES, adjustments
   // either order -- this ensures a bonus is never silently dropped just
   // because its batch happened to be processed before the one with the
   // matching stake/commission items.
-  for (const batch of batches) {
-    for (const supp of batch.supplemental) {
-      // Every supplemental payment type counts toward monthlyBonus (the combined
-      // total used everywhere else) -- but bonus/palliative/gift are also tracked
-      // individually so each can be checked against the sheet on its own, not just
-      // as one blended number. Online agents are excluded here too, confirmed
-      // explicitly: the "no commission for online accounts" policy covers every
-      // payment type, not just the per-transaction commission -- so a bonus line
-      // for an elb- agent is real money in the sheet but zero here, same as
-      // their commission, not paid through this system at all.
-      const key = supp.agentUsername.toLowerCase();
-      if (!agentMap.has(key)) continue;
-      const a = agentMap.get(key);
-      if (a.channel === "online") continue;
-      // Confirmed: agents on either Globalbet plan type ("40% on profit" or
-      // "no_supplemental_pay") get NO Bonus/Palliative/Gift at all --
-      // verified against real data for the 40% plan; no_supplemental_pay is
-      // a confirmed negotiated arrangement (001fc-gwa-spareshop) with the
-      // same effective treatment for supplemental pay, but normal weekly
-      // commission (unlike the 40% plan, which also overrides commission --
-      // see the isFortyPercentPlan check above, computed independently of
-      // this exclusion).
-      if (fortyPercentAgents.has(key) || noSupplementalAgents.has(key)) continue;
-      const amt = supp.amount || 0;
-      a.monthlyBonus += amt;
-      if (supp.type === "bonus") a.bonus += amt;
-      else if (supp.type === "palliative") a.palliative += amt;
-      else if (supp.type === "gift") a.gift += amt;
-    }
+  const suppEntries = [...batches.flatMap(b => b.supplemental.map(sp => ({ ...sp, batchId: b.id }))), ...derivedSupplemental];
+  const batchIds = new Set(batches.map(b => b.id));
+  const consumed = new Set();
+  const addSupp = (a, type, amt) => {
+    a.monthlyBonus += amt;
+    if (type === "bonus") a.bonus += amt;
+    else if (type === "palliative") a.palliative += amt;
+    else if (type === "gift") a.gift += amt;
+  };
+  const noteOverride = (o, a, systemValue) => {
+    a.hasEdit = true; if (!a.editedFields.includes(o.field)) a.editedFields.push(o.field);
+    appliedOverrides.push({ id: o.id, batchId: o.batchId, agent: a.username, field: o.field, system: systemValue, override: o.overrideValue,
+      original: o.originalValue, reason: o.reason, createdBy: o.createdBy, createdAt: o.createdAt });
+  };
+  for (const supp of suppEntries) {
+    const key = supp.agentUsername.toLowerCase();
+    if (!agentMap.has(key)) continue;
+    const a = agentMap.get(key);
+    // A person's override for this exact agent, week and payment type replaces the calculated amount and
+    // beats every automatic rule below (online exclusion, 40% plan, no_supplemental_pay): it is the most
+    // specific instruction there is, the same precedence a manual commission adjustment has.
+    const ok = overrideKey(supp.batchId, key, supp.type);
+    const ov = overrideMap.get(ok);
+    if (ov) { consumed.add(ok); noteOverride(ov, a, supp.amount || 0); addSupp(a, supp.type, ov.overrideValue); continue; }
+    // Every supplemental payment type counts toward monthlyBonus (the combined total used everywhere
+    // else) -- but bonus/palliative/gift are also tracked individually so each can be checked on its
+    // own. Online agents are excluded (the "no commission for online accounts" policy covers every
+    // payment type), and so are agents on either Globalbet plan type that carries no supplemental pay
+    // ("40% on profit" and "no_supplemental_pay"; the latter keeps normal weekly commission).
+    if (a.channel === "online") continue;
+    if (fortyPercentAgents.has(key) || noSupplementalAgents.has(key)) continue;
+    addSupp(a, supp.type, supp.amount || 0);
+  }
+  // An override can also ADD a payment the system calculated as nothing (e.g. a one-off gift).
+  for (const [ok, ov] of overrideMap) {
+    if (consumed.has(ok) || !batchIds.has(ov.batchId)) continue;
+    const a = agentMap.get(String(ov.agentUsername).toLowerCase());
+    if (!a) continue;
+    noteOverride(ov, a, 0); addSupp(a, ov.field, ov.overrideValue);
+  }
+
+  // Avg Stake / Total Earnings / Balance (Globalbet). The sheet prints these per week, but they
+  // are not stored, and the sheet's value is a single week's -- so: use the sheet's figure only
+  // when exactly one Globalbet week is involved and it supplied one; otherwise work them out
+  // from the Globalbet-only tallies. Same identities as the sheet (verified: Total Earnings =
+  // commission + bonus + palliative + gift; Balance = Profit - Total Earnings; Avg Stake =
+  // stake / tickets), so the figures agree wherever both exist.
+  for (const a of agentMap.values()) {
+    if (!a.hasGB || a.channel === "online") continue;
+    const multi = a.gbItems > 1 || a.hasEdit || a.hasAdjustment;   // an edited agent's printed total no longer applies
+    if ((multi || a.avgStake === null) && a.gbTickets > 0) a.avgStake = a.gbStake / a.gbTickets;
+    if (multi || a.totalEarnings === null) a.totalEarnings = a.gbCommission + a.bonus + a.palliative + a.gift;
+    if (multi || a.balance === null) a.balance = a.gbProfit - a.totalEarnings;
   }
 
   const agents = Array.from(agentMap.values()).map(a => ({ ...a, products: Array.from(a.products) }))
@@ -804,7 +865,7 @@ function aggregateBatches(batches, blockRules = DEFAULT_BLOCK_RULES, adjustments
     .sort((a, b) => b.stake - a.stake);
 
   return {
-    agents, products, states, mismatches, adjustments: appliedAdjustments,
+    agents, products, states, mismatches, adjustments: appliedAdjustments, overrides: appliedOverrides, lines,
     stats: { verifiedCount, unverifiedCount, mismatchCount, overrideCount, adjustedCount, reportedOnlyCount },
     totals: {
       stake: agents.reduce((s, a) => s + a.stake, 0), payout: agents.reduce((s, a) => s + a.payout, 0),
@@ -976,5 +1037,5 @@ function toCSV(rows, columns) {
 export {
   PARSERS, detectFileType, detectPeriod, aggregateBatches, computeCommission, computeTrends, computeBatchSeries,
   decodeAgent, money, toCSV, EXCLUDED_BLOCKS, STRUCTURALLY_TRUSTED, DEFAULT_BLOCK_RULES, adjustmentKey, productOf,
-  computeInactiveAndDropAgents,
+  computeInactiveAndDropAgents, deriveGlobalbetSupplemental, GB_COMMISSION_UPLIFT,
 };

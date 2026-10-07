@@ -143,6 +143,14 @@ export async function saveBatch(batch, userId) {
   if (batch.supplemental.length > 0) {
     await insertChunked("supplemental_payments", batch.supplemental.map(s => suppToDb(s, batchRow.id)));
   }
+  if (batch.sheetFigures && batch.sheetFigures.length > 0) {
+    try {
+      await insertChunked("sheet_figures", batch.sheetFigures.map(f => ({
+        batch_id: batchRow.id, agent_username: f.agentUsername.toLowerCase(),
+        commission: f.commission, bonus: f.bonus, palliative: f.palliative, gift: f.gift, total_earnings: f.totalEarnings,
+      })));
+    } catch (e) { /* schema_v13 not run yet: the upload is fine; only the sheet-vs-dashboard check is unavailable for this week */ }
+  }
   await recordUploadSyncRun(sourceSystem, batch.items.length + batch.supplemental.length);
   return {
     ...batch, id: batchRow.id, uploadedAt: batchRow.uploaded_at, periodStart: batchRow.period_start, periodEnd: batchRow.period_end,
@@ -187,6 +195,16 @@ export async function loadAllBatches() {
     .from("supplemental_payments").select("*").in("batch_id", batchIds);
   if (suppErr) throw suppErr;
 
+  // What each sheet printed (schema_v13). Absent table or no rows simply means no comparison for that week.
+  const figuresByBatch = {};
+  try {
+    const { data: figRows, error: figErr } = await supabase.from("sheet_figures").select("*").in("batch_id", batchIds);
+    if (!figErr) for (const r of figRows) (figuresByBatch[r.batch_id] ||= []).push({
+      agentUsername: r.agent_username, commission: r.commission === null ? null : Number(r.commission), bonus: r.bonus === null ? null : Number(r.bonus),
+      palliative: r.palliative === null ? null : Number(r.palliative), gift: r.gift === null ? null : Number(r.gift),
+      totalEarnings: r.total_earnings === null ? null : Number(r.total_earnings),
+    });
+  } catch (e) { /* non-critical */ }
   const itemsByBatch = {}, suppByBatch = {};
   for (const row of itemRows) (itemsByBatch[row.batch_id] ||= []).push(itemFromDb(row));
   for (const row of suppRows) (suppByBatch[row.batch_id] ||= []).push(suppFromDb(row));
@@ -198,7 +216,7 @@ export async function loadAllBatches() {
     // the upload date so sorting/filtering still works, just less precisely.
     periodStart: b.period_start || b.uploaded_at?.slice(0, 10) || null,
     periodEnd: b.period_end || b.uploaded_at?.slice(0, 10) || null,
-    items: itemsByBatch[b.id] || [], supplemental: suppByBatch[b.id] || [],
+    items: itemsByBatch[b.id] || [], supplemental: suppByBatch[b.id] || [], sheetFigures: figuresByBatch[b.id] || [],
   }));
 }
 
@@ -344,4 +362,84 @@ export async function loadActivityLog(limit = 200) {
     id: r.id, actorName: nameById[r.actor_id] || "—", action: r.action,
     details: r.details, createdAt: r.created_at,
   }));
+}
+
+/* ============================================================ live connectors */
+// The browser's ONLY path to a backoffice: our Supabase Edge Function, with the
+// user's own session. It never carries, receives or stores a backoffice
+// credential, cookie or token -- those live as Edge Function secrets and are
+// read server-side by the connector that owns them.
+export async function listConnectors() {
+  try {
+    const { data, error } = await supabase.functions.invoke("sync-source", { body: { action: "list" } });
+    if (error || !data || !Array.isArray(data.connectors)) return { reachable: false, connectors: null };
+    return { reachable: true, connectors: data.connectors };
+  } catch (e) {
+    return { reachable: false, connectors: null };
+  }
+}
+
+// body: { action: "test", source } | { action: "sync", source, mode, from, to }
+export async function runConnectorAction(body) {
+  const { data, error } = await supabase.functions.invoke("sync-source", { body });
+  if (error) throw new Error(error.message || "The sync service did not respond.");
+  return data;
+}
+
+/* ============================================================ review & adjust (schema_v12) */
+// Corrections to Bonus / Palliative / Gift for one agent in one uploaded week, and the "this week has been
+// reviewed" checkpoint. Reading degrades gracefully when schema_v12 hasn't been run: no corrections exist, and
+// review tracking is reported as unavailable (null) so the UI says so instead of nagging about every week.
+const v12Missing = (error) => error && (error.code === "42P01" || /does not exist|schema cache|could not find the table/i.test(error.message || ""));
+const v12Help = "Review & Adjust needs schema_v12_review_and_overrides.sql to be run in Supabase first. Nothing was saved.";
+
+function overrideFromDb(row, nameById) {
+  return {
+    id: row.id, batchId: row.batch_id, agentUsername: row.agent_username, field: row.field,
+    originalValue: row.original_value === null ? null : Number(row.original_value), overrideValue: Number(row.override_value),
+    reason: row.reason, createdBy: (nameById && nameById[row.created_by]) || "—", createdAt: row.created_at,
+  };
+}
+export async function loadAllOverrides() {
+  const [{ data: rows, error }, profiles] = await Promise.all([
+    supabase.from("row_overrides").select("*").order("created_at", { ascending: false }),
+    getAllProfiles(),
+  ]);
+  if (error) return [];
+  const nameById = {};
+  for (const p of profiles) nameById[p.id] = p.name;
+  return rows.map(r => overrideFromDb(r, nameById));
+}
+export async function saveOverride(o, userId) {
+  // One correction per agent, field and week: saving again updates it rather than stacking a second one.
+  const { error } = await supabase.from("row_overrides").upsert({
+    batch_id: o.batchId, agent_username: o.agentUsername.toLowerCase(), field: o.field,
+    original_value: o.originalValue, override_value: o.overrideValue, reason: o.reason,
+    created_by: userId, created_at: new Date().toISOString(),
+  }, { onConflict: "batch_id,agent_username,field" });
+  if (v12Missing(error)) throw new Error(v12Help);
+  if (error) throw error;
+}
+export async function deleteOverride(id) {
+  const { error } = await supabase.from("row_overrides").delete().eq("id", id);
+  if (v12Missing(error)) throw new Error(v12Help);
+  if (error) throw error;
+}
+export async function loadBatchReviews() {
+  const [{ data: rows, error }, profiles] = await Promise.all([supabase.from("batch_reviews").select("*"), getAllProfiles()]);
+  if (error) return null;   // null = review tracking isn't set up yet
+  const nameById = {};
+  for (const p of profiles) nameById[p.id] = p.name;
+  return rows.map(r => ({ batchId: r.batch_id, reviewedBy: (nameById && nameById[r.reviewed_by]) || "—", reviewedAt: r.reviewed_at, note: r.note }));
+}
+export async function markBatchReviewed(batchId, userId, note) {
+  const { error } = await supabase.from("batch_reviews").upsert(
+    { batch_id: batchId, reviewed_by: userId, reviewed_at: new Date().toISOString(), note: note || null }, { onConflict: "batch_id" });
+  if (v12Missing(error)) throw new Error(v12Help);
+  if (error) throw error;
+}
+export async function unmarkBatchReviewed(batchId) {
+  const { error } = await supabase.from("batch_reviews").delete().eq("batch_id", batchId);
+  if (v12Missing(error)) throw new Error(v12Help);
+  if (error) throw error;
 }
